@@ -1,0 +1,10 @@
+Flask==3.0.0
+Flask-SocketIO==5.3.5
+python-socketio==5.10.0
+python-engineio==4.8.0
+google-generativeai==0.3.2
+google-genai==1.46.0
+python-dotenv==1.0.0
+Pillow==10.1.0
+# eventlet==0.33.3  # Not compatible with Python 3.12, using threading instead
+supabase>=2.24.0

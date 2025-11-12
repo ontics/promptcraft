@@ -1,0 +1,33 @@
+# Virtual environment
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Generated images (experiment data)
+static/generated/
+
+# Development documentation and SQL files (keep local, exclude from GitHub)
+features/
+test_db_connection.py

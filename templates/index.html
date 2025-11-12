@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PromptCraft - AI Image Generation Game</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+</head>
+<body>
+    <div id="app">
+        <!-- Lobby Screen -->
+        <div id="lobby-screen" class="screen active">
+            <div class="container">
+                <h1 class="game-title">🎨 PromptCraft</h1>
+                <p class="subtitle">Compete to create AI images that match the target!</p>
+
+                <div class="lobby-content">
+                    <div class="player-input">
+                        <input type="text" id="player-name" placeholder="Enter your name" maxlength="20">
+                        <button id="join-btn" class="btn btn-primary">Join Game</button>
+                    </div>
+
+                    <div class="lobby-grid">
+                        <!-- Left: Lobby / Players -->
+                        <div class="lobby-wrapper card">
+                            <div class="lobby-info">
+                                <p>Players in lobby: <span id="lobby-count">0</span></p>
+                                <div id="player-list" class="player-list lobby-box"></div>
+                                <div id="admin-controls" style="display: none;">
+                                    <button id="assign-teams-btn" class="btn btn-primary">Assign Teams</button>
+                                    <button id="start-game-btn" class="btn btn-success">Start Game</button>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Right: How to Play with Bud -->
+                        <div class="onboarding-wrapper card">
+                            <div class="howto-header">
+                                <h3 class="onboarding-title">How to Play</h3>
+                            </div>
+                            <!-- Dialogue bubble above Bud -->
+                            <div id="onboarding-bubble" class="onboarding-bubble" style="max-width: 520px; margin: 0 auto 10px;">
+                                <p id="onboarding-text"></p>
+                            </div>
+                            <!-- Bud centered with side arrows -->
+                            <div class="howto-avatar" style="justify-content: center;">
+                                <button id="onboarding-prev" class="onboarding-arrow" aria-label="Previous">&lt;</button>
+                                <div id="onboarding-avatar" class="onboarding-avatar" title="Bud">
+                                    <img id="onboarding-bud-img" src="/static/images/avatars/bud/bud_smiling.svg" alt="Bud" style="width: 80%; height: 80%; object-fit: contain;">
+                                </div>
+                                <button id="onboarding-next" class="onboarding-arrow" aria-label="Next">&gt;</button>
+                            </div>
+                            <div class="onboarding-list">
+                                <ul id="onboarding-list">
+                                    <li id="ob-item-2" class="hidden">🎯 Prompt an image which matches the target</li>
+                                    <li id="ob-item-3" class="hidden">⏱️ Generate as many as you want within 5 minutes</li>
+                                    <li id="ob-item-4" class="hidden">🖼️ Pick your best image at the end of the round</li>
+                                    <li id="ob-item-5" class="hidden">🗳️ Vote for the image you think looks most like the target</li>
+                                    <li id="ob-item-6" class="hidden">🏆 Earn points based on votes you receive</li>
+                                    <li id="ob-item-7" class="hidden">🎮 Play 3 rounds - highest scoring player wins!</li>
+                                </ul>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Admin Gamemaster Screen (hidden initially) -->
+                    <div id="admin-screen" class="admin-wrapper card" style="display: none; margin-top: 20px;">
+                        <h2>🎮 Gamemaster Dashboard</h2>
+                        <div id="admin-player-list" class="admin-player-list"></div>
+                        <div id="admin-game-controls" style="display: none;">
+                            <div class="admin-controls-group">
+                                <h3>Round Controls</h3>
+                                <button id="admin-end-round-btn" class="btn btn-danger">End Round Early</button>
+                                <button id="admin-skip-voting-btn" class="btn btn-warning">Skip Voting / Advance</button>
+                                <button id="admin-next-round-btn" class="btn btn-success">Next Round</button>
+                            </div>
+                            <div class="admin-status">
+                                <p>Round: <span id="admin-round">-</span></p>
+                                <p>Status: <span id="admin-status">-</span></p>
+                                <p>Time Remaining: <span id="admin-time-remaining">-</span></p>
+                                <p>Target: <span id="admin-target">-</span></p>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Game Screen -->
+        <div id="game-screen" class="screen">
+            <div class="game-header">
+                <div class="header-left">
+                    <h2>Round <span id="round-number">1</span>/3</h2>
+                    <p class="player-info">
+                        <span id="player-display-name"></span>
+                    </p>
+                </div>
+                <div class="header-center">
+                    <div class="timer" id="timer">5:00</div>
+                </div>
+                <div class="header-right">
+                    <p>Score: <span id="player-score">0</span></p>
+                </div>
+            </div>
+
+            <div class="game-content">
+                <div class="main-game-layout">
+                    <!-- Left Column: Main Gameplay -->
+                    <div class="left-column">
+                        <div class="conversation-area" id="conversation-area">
+                            <p class="empty-conversation">Start generating images by typing a prompt below</p>
+                        </div>
+
+                        <div class="prompt-section">
+                            <textarea id="prompt-input" placeholder="Text box for user prompt..." rows="2"></textarea>
+                            <button id="generate-btn" class="btn btn-primary">
+                                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Game Info -->
+                    <div class="right-column">
+                        <div class="target-image-section">
+                            <h3>🎯 TARGET IMAGE</h3>
+                            <div class="target-image-container">
+                                <img id="target-image-display" src="" alt="Target Image">
+                            </div>
+                        </div>
+
+                        <div class="character-section">
+                            <div id="character-bubble" class="character-bubble" style="display: none;">
+                                <p id="character-bubble-text"></p>
+                            </div>
+                            <div id="character-avatar-large" class="character-avatar-large">
+                                <img id="avatar-svg" src="" alt="Character Avatar" style="width: 100%; height: 100%; object-fit: contain; display: none;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transition Screen -->
+        <div id="transition-screen" class="screen">
+            <div class="container">
+                <div class="transition-content">
+                    <h2>⏱️ Round Complete!</h2>
+                    <p id="transition-message" class="transition-message">Now you'll get to choose the best image that you created.</p>
+                    <div class="transition-spinner">
+                        <div class="spinner"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Image Selection Screen -->
+        <div id="selection-screen" class="screen">
+            <div class="container">
+                <h2>Select Your Best Image</h2>
+                <p class="subtitle">Choose the image that best matches the target</p>
+                <div class="timer" id="selection-timer">30</div>
+                <div id="selection-waiting" style="display: none; margin: 10px 0; color: #666;">
+                    <p>Waiting for <span id="waiting-count">0</span> player(s) to select...</p>
+                </div>
+                <div id="default-selection-notice" style="display: none; margin: 10px 0; padding: 10px; background: #fff3cd; border-radius: 5px; color: #856404;">
+                    <p>⚠️ Select your best image or your last one will be submitted automatically.</p>
+                </div>
+
+                <div id="selection-gallery" class="selection-gallery">
+                </div>
+
+                <button id="confirm-selection-btn" class="btn btn-primary" disabled>Confirm Selection</button>
+            </div>
+        </div>
+
+        <!-- Voting Screen -->
+        <div id="voting-screen" class="screen">
+            <div class="container">
+                <h2>Vote for the Best Image</h2>
+                <p class="subtitle">Which image best matches the target?</p>
+
+                <div class="voting-layout">
+                    <!-- Left: User-submitted images grid -->
+                    <div class="voting-left">
+                        <h3>Player Submissions</h3>
+                        <div id="voting-gallery" class="voting-gallery">
+                        </div>
+                    </div>
+
+                    <!-- Right: Target image (non-selectable) -->
+                    <div class="voting-right">
+                        <h3>Target Image</h3>
+                        <div class="target-image-voting">
+                            <img id="voting-target-image" src="" alt="Target Image">
+                        </div>
+                    </div>
+                </div>
+
+                <button id="confirm-vote-btn" class="btn btn-primary" disabled>Confirm Vote</button>
+            </div>
+        </div>
+
+        <!-- Round Results Screen -->
+        <div id="results-screen" class="screen">
+            <div class="container">
+                <h2>Round <span id="results-round">1</span> Results</h2>
+
+                <div id="results-list" class="results-list">
+                </div>
+
+                <!-- Next Round button hidden by default - only shown to admin in admin dashboard -->
+                <button id="next-round-btn" class="btn btn-primary" style="display: none;">Next Round</button>
+            </div>
+        </div>
+
+        <!-- Game Over Screen -->
+        <div id="gameover-screen" class="screen">
+            <div class="container">
+                <h1>🏆 Game Over!</h1>
+
+                <div id="final-results" class="final-results">
+                </div>
+
+                <button id="back-to-home-btn" class="btn btn-success">Back to Home</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/game.js') }}"></script>
+</body>
+</html>
