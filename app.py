@@ -2164,4 +2164,7 @@ if __name__ == '__main__':
     print("\n📊 Analytics endpoints:")
     print(f"   - http://localhost:{port}/analytics/errors - View image generation error tracking")
     print()
-    socketio.run(app, host='0.0.0.0', port=port, debug=debug, allow_unsafe_werkzeug=debug)
+    # Allow unsafe werkzeug in production for Railway (which runs app directly)
+    # PORT environment variable is set by Railway, indicating we're on a platform that needs this
+    allow_unsafe_werkzeug = debug or os.environ.get('PORT') is not None
+    socketio.run(app, host='0.0.0.0', port=port, debug=debug, allow_unsafe_werkzeug=allow_unsafe_werkzeug)
