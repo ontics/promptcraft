@@ -70,21 +70,21 @@ BUDDY_ERROR_MESSAGE = "That prompt didn't go through. Please try a new prompt."
 
 # Spud messages - shown progressively based on prompt count (1-indexed: prompt_count = 1 shows message[0])
 SPUDDY_MESSAGES = [
-    "The cooling water for your prompt could keep a small houseplant alive for a day. Poor fern never stood a chance.",
-    "Your carbon footprint compounds every time you prompt. I'm starting to feel the heat!",
-    "You're up to 1.2 kWh and 130 grams of CO2. That's like driving half a mile!",
+    "The cooling water for your prompt could've kept a small houseplant alive for a day.",
     "By now, you've used enough power to toast a slice of bread.",
-    "The cooling water for this image could've filled a glass or two. Drink responsibly, prompt responsibly.",
+    "You've emitted as much CO2 as driving half a mile!",
     "That's a full bottle of fresh water consumed. I was gonna drink that!",
-    "That image? About as much carbon as sending an email with a big attachment.",
-    "Humans need 8 glasses of water a day. Your images have just used them up. Feeling thirsty?",
     "You've used more energy this round than charging your phone 8 times over!",
-    "390 grams of CO2 added to the atmosphere. My leaves are drying up…",
-    "That's 3.6 kWh WASTED! That's keeping the house lights on for 3 days. Gone in minutes for… this?",
-    "You've used enough power to run a microwave for 5 minutes. It's getting toasty in here!",
-    "Thirteen images. Data centers consume 1% of global electricity. And you just added to it…",
+    "Humans need 8 glasses of water a day. Your prompting just used them up. Feeling thirsty?",
+    "The power used in this session could've kept the house lights on for 3 days. Gone in minutes for… this?",
+    "You're making the trees work overtime! My leaves are drying up…",
+    "You've used enough power to run a microwave for 3 hours. It's getting toasty in here!",
+    "The cooling water for this image could've filled 551 fish tanks.",
+    "Eleven images. Data centers consume 1% of global electricity. And you just added to it…",
     "Did you know 20,000 trees have been burned to clear land for new data center construction?",
-    "You would need 12 earths to sustain your current levels of natural resource consumption!"
+    "You would need 12 earths to sustain your current levels of natural resource consumption!",
+    "Your carbon footprint is among the highest 1% of individuals. Is it lonely at the top?",
+    "OK, fifteen images? That's the same emissions as flying three times around the world."
 ]
 
 # Spud error message
@@ -94,24 +94,24 @@ def generate_session_id():
     return os.urandom(16).hex()
 
 def assign_team():
-    # Random assignment to Team A or Team B
-    return random.choice(['A', 'B'])
+    # Random assignment to Team Green or Team Orange
+    return random.choice(['Green', 'Orange'])
 
 def get_character(team):
-    return 'Buddy' if team == 'A' else 'Spuddy'
+    return 'Buddy' if team == 'Green' else 'Spuddy'
 
 def get_character_for_round(player, current_round):
     """
     Determine which character a player sees based on round number.
     Round 1: All players see Bud (control)
-    Rounds 2-3: Team A sees Bud, Team B sees Spud (treatment)
+    Rounds 2-3: Team Green sees Bud, Team Orange sees Spud (treatment)
     """
     if current_round == 1:
         return 'Bud'
     else:  # Rounds 2 and 3
-        if player.get('team') == 'A':
+        if player.get('team') == 'Green':
             return 'Bud'
-        else:  # Team B (treatment)
+        else:  # Team Orange (treatment)
             return 'Spud'
 
 def get_spud_plant_state(prompt_count, has_successful_prompt=False):
@@ -598,19 +598,19 @@ def handle_assign_teams():
     # Shuffle connected players for random assignment
     random.shuffle(connected_players)
     
-    # Balance teams: split evenly, with extra players going to Team A if odd
+    # Balance teams: split evenly, with extra players going to Team Green if odd
     mid_point = len(connected_players) // 2
-    team_a_players = connected_players[:mid_point]
-    team_b_players = connected_players[mid_point:]
+    team_green_players = connected_players[:mid_point]
+    team_orange_players = connected_players[mid_point:]
     
     # Assign teams only to connected players
-    for player in team_a_players:
-        player['team'] = 'A'
-        player['character'] = get_character('A')
+    for player in team_green_players:
+        player['team'] = 'Green'
+        player['character'] = get_character('Green')
     
-    for player in team_b_players:
-        player['team'] = 'B'
-        player['character'] = get_character('B')
+    for player in team_orange_players:
+        player['team'] = 'Orange'
+        player['character'] = get_character('Orange')
     
     # Update players in database if game has started
     if game_state.get('game_id') and db.is_configured():
@@ -646,7 +646,7 @@ def handle_assign_teams():
         if game_state['status'] != 'lobby':
             handle_admin_get_status()
     
-    print(f"Teams assigned by admin: Team A ({len(team_a_players)}), Team B ({len(team_b_players)})")
+    print(f"Teams assigned by admin: Team Green ({len(team_green_players)}), Team Orange ({len(team_orange_players)})")
 
 @socketio.on('start_game')
 def handle_start_game():

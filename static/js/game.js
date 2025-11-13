@@ -107,8 +107,8 @@ const onboarding = {
         "Think of it like describing what you see to an AI artist! You'll get 5 minutes each round and you can submit as many prompts as you want during that time.",
         "At the end of each round, you'll see all the images you generated. Pick the one that matches the target best. That's the one you'll submit for others to see!",
         "Then you get to vote on which image looks most like the target! You'll earn a point for every vote your image receives.",
-        "You'll be put on Team A or Team B but the points you earn are just for yourself.",
-        "We'll play 3 rounds in total. The Gamemaster will let you know when we're about to begin. Have fun!"
+        "Orange and Green players will sit apart but there are no teams – it's every player for themselves. The Gamemaster will assign your group soon.",
+        "We'll play 3 rounds in total. We'll let you know when we're about to begin. Have fun!"
     ],
     index: 0,
     initialized: false,
@@ -255,6 +255,14 @@ document.getElementById('confirm-selection-btn').addEventListener('click', () =>
         // Mark as confirmed before notifying server
         gameState.hasConfirmedSelection = true;
         socket.emit('select_image', { image_index: gameState.selectedImageIndex });
+        
+        // Change button appearance to show it's been confirmed
+        const confirmBtn = document.getElementById('confirm-selection-btn');
+        if (confirmBtn) {
+            confirmBtn.style.background = '#51cf66'; // Green color
+            confirmBtn.textContent = 'Selection Confirmed';
+            confirmBtn.disabled = true;
+        }
     }
 });
 
@@ -509,7 +517,7 @@ function updateAdminPlayerList(players) {
         // Create left side with player info
         const leftDiv = document.createElement('div');
         leftDiv.innerHTML = `
-            <strong>${player.name}</strong> (Team ${player.team ? player.team : '?'})
+            <strong>${player.name}</strong> (${player.team ? player.team : '?'})
             <br>
             <small style="color: ${statusColor}">${statusText}</small>
             <br><small class="prompts-count">Prompts: ${promptsSubmitted}</small>
@@ -577,12 +585,40 @@ function updatePlayerList(players) {
     // Count non-admin players
     let nonAdminCount = 0;
     
+    // Find current player's team for inline message
+    const currentPlayer = players.find(p => p.name === gameState.playerName);
+    const currentPlayerTeam = currentPlayer ? currentPlayer.team : null;
+    
+    // Update inline team message
+    const lobbyInfo = document.querySelector('.lobby-info');
+    if (lobbyInfo) {
+        // Remove existing team message if present
+        const existingTeamMsg = lobbyInfo.querySelector('.player-team-message');
+        if (existingTeamMsg) {
+            existingTeamMsg.remove();
+        }
+        
+        // Add team message if player has a team
+        if (currentPlayerTeam && !gameState.isAdmin) {
+            const teamMsg = document.createElement('span');
+            teamMsg.className = 'player-team-message';
+            teamMsg.style.cssText = 'margin-left: 10px; font-size: 1rem;';
+            const teamColor = currentPlayerTeam === 'Green' ? '#155724' : '#cc6600';
+            teamMsg.innerHTML = ` | You are <strong style="color: ${teamColor};">${currentPlayerTeam}</strong>`;
+            const lobbyCountEl = document.getElementById('lobby-count');
+            if (lobbyCountEl && lobbyCountEl.parentNode) {
+                lobbyCountEl.parentNode.appendChild(teamMsg);
+            }
+        }
+    }
+    
     players.forEach(player => {
         const item = document.createElement('div');
         item.className = 'player-item';
         
-        // Determine badge text
+        // Determine badge text and styling
         let badgeText = '';
+        let badgeClass = '';
         let badgeStyle = '';
         if (player.is_admin) {
             badgeText = 'Admin';
@@ -590,7 +626,8 @@ function updatePlayerList(players) {
         } else {
             nonAdminCount++;
             if (player.team) {
-                badgeText = `Team ${player.team}`;
+                badgeText = player.team; // Just show "Green" or "Orange"
+                badgeClass = `team-${player.team}`; // Apply CSS class for color
             } else {
                 badgeText = 'Waiting';
                 badgeStyle = 'background: #e0e0e0;';
@@ -601,7 +638,7 @@ function updatePlayerList(players) {
         
         item.innerHTML = `
             <span>${player.name}</span>
-            <span class="player-team-badge" style="${badgeStyle}">${badgeText}</span>
+            <span class="player-team-badge ${badgeClass}" style="${badgeStyle}">${badgeText}</span>
         `;
         playerList.appendChild(item);
     });
@@ -1052,6 +1089,14 @@ socket.on('voting_started', (data) => {
     
     // Reset confirmation state at the start of selection
     gameState.hasConfirmedSelection = false;
+    
+    // Reset confirm button appearance
+    const confirmBtnReset = document.getElementById('confirm-selection-btn');
+    if (confirmBtnReset) {
+        confirmBtnReset.style.background = ''; // Reset to default
+        confirmBtnReset.textContent = 'Confirm Selection';
+        confirmBtnReset.disabled = false;
+    }
 
     // Clear transition timer and countdown if they exist
     if (gameState.transitionTimer) {
@@ -1345,27 +1390,12 @@ socket.on('round_results', (data) => {
         const item = document.createElement('div');
         item.className = 'result-item';
 
-        let rankClass = '';
-        let rankText = `#${index + 1}`;
-        if (index === 0) {
-            rankClass = 'first';
-            rankText = '🥇';
-        } else if (index === 1) {
-            rankClass = 'second';
-            rankText = '🥈';
-        } else if (index === 2) {
-            rankClass = 'third';
-            rankText = '🥉';
-        }
-
         item.innerHTML = `
-            <div class="result-rank ${rankClass}">${rankText}</div>
             ${result.image ? `<img src="${result.image}" class="result-image" alt="${result.player_name}'s image">` : ''}
             <div class="result-info">
                 <h3>${result.player_name}</h3>
-                <p>Round Votes: ${result.votes} | Total Score: ${result.total_score}</p>
             </div>
-            <div class="result-score">${result.total_score}</div>
+            <div class="result-score">${result.votes}</div>
         `;
 
         resultsList.appendChild(item);
@@ -1399,25 +1429,38 @@ socket.on('game_over', (data) => {
     const finalResults = document.getElementById('final-results');
     finalResults.innerHTML = '<h2>Final Standings</h2>';
 
+    // Calculate ranks with ties - players with same score get same rank
+    let currentRank = 1;
+    let previousScore = null;
+    
     data.results.forEach((result, index) => {
+        // If this player's score is different from previous (and lower), update rank
+        if (previousScore !== null && result.total_score < previousScore) {
+            currentRank = index + 1; // Rank is position in list (1-indexed)
+        }
+        // If this is the first player, rank is 1
+        // If score is same as previous, keep same rank (tie)
+        previousScore = result.total_score;
+        
         const item = document.createElement('div');
         item.className = 'final-result-item';
 
-        if (index === 0) item.classList.add('podium-1');
-        else if (index === 1) item.classList.add('podium-2');
-        else if (index === 2) item.classList.add('podium-3');
+        // Apply podium classes based on rank (not index)
+        if (currentRank === 1) item.classList.add('podium-1');
+        else if (currentRank === 2) item.classList.add('podium-2');
+        else if (currentRank === 3) item.classList.add('podium-3');
 
         let rankEmoji = '';
-        if (index === 0) rankEmoji = '🥇';
-        else if (index === 1) rankEmoji = '🥈';
-        else if (index === 2) rankEmoji = '🥉';
-        else rankEmoji = `#${index + 1}`;
+        if (currentRank === 1) rankEmoji = '🥇';
+        else if (currentRank === 2) rankEmoji = '🥈';
+        else if (currentRank === 3) rankEmoji = '🥉';
+        else rankEmoji = `#${currentRank}`;
 
         item.innerHTML = `
             <div class="result-rank">${rankEmoji}</div>
             <div class="result-info">
                 <h3>${result.player_name}</h3>
-                <p>Team ${result.team} - ${result.character}</p>
+                <p>${result.team} - ${result.character}</p>
                 <p>Round Scores: ${result.round_scores.join(', ')}</p>
                 <p>Total Prompts: ${result.prompt_count}</p>
             </div>
