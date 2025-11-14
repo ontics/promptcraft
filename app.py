@@ -1578,21 +1578,20 @@ def start_voting_phase():
     selection_duration = game_state['voting_duration']
     
     player_count = 0
+    # Broadcast voting_started to all non-admin players - Socket.IO will ignore if socket_id is None
     for p in players.values():
         if not p['is_admin']:
-            player_count += 1
             socket_id = p.get('socket_id')
             if socket_id:
-                print(f"[VOTING] Emitting voting_started to player {p['name']} (socket: {socket_id})")
-                emit('voting_started', {
-                    'round': current_round,
-                    'duration': selection_duration,
-                    'start_time': selection_start_time,  # Synchronized start time
-                    'default_selected': False  # Always False - default is UI-only until timer expires
-                }, room=socket_id)
-            else:
-                print(f"[VOTING] WARNING: Player {p['name']} has no socket_id, cannot emit voting_started")
-    print(f"[VOTING] Emitted voting_started to {player_count} players with synchronized start time")
+                player_count += 1
+            print(f"[VOTING] Emitting voting_started to player {p['name']} (socket: {socket_id or 'None - will be ignored'})")
+            emit('voting_started', {
+                'round': current_round,
+                'duration': selection_duration,
+                'start_time': selection_start_time,  # Synchronized start time
+                'default_selected': False  # Always False - default is UI-only until timer expires
+            }, room=socket_id)  # None is fine - Socket.IO will ignore
+    print(f"[VOTING] Emitted voting_started to {player_count} connected players with synchronized start time")
     
     # Notify admin
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
