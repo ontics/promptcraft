@@ -440,11 +440,42 @@ def handle_join_game(data):
                         'target_image': {'url': target_image.get('url', '')}
                     }, room=player['socket_id'])
                 elif game_state['status'] == 'round_results':
-                    # Show round results
-                    show_round_results()
+                    # Show round results - this will broadcast to all connected players
+                    # Don't call show_round_results() here as it will be called when admin advances
+                    # Just send the current results to this reconnecting player
+                    current_round = game_state['current_round']
+                    results = []
+                    for s_id, p in players.items():
+                        if not p['is_admin']:
+                            votes = p['votes_received'].get(current_round, 0)
+                            results.append({
+                                'player_name': p.get('display_name', p['name']),
+                                'votes': votes,
+                                'total_score': p['score'],
+                                'image': p['selected_images'].get(current_round, {}).get('image_data', '')
+                            })
+                    results.sort(key=lambda x: x['total_score'], reverse=True)
+                    emit('round_results', {
+                        'round': current_round,
+                        'results': results
+                    }, room=player['socket_id'])
                 elif game_state['status'] == 'game_over':
-                    # Show game over
-                    end_game()
+                    # Show game over - send current final results to this reconnecting player
+                    final_results = []
+                    for s_id, p in players.items():
+                        if not p['is_admin']:
+                            final_results.append({
+                                'player_name': p.get('display_name', p['name']),
+                                'total_score': p['score'],
+                                'round_scores': p['round_scores'],
+                                'team': p['team'],
+                                'character': p['character'],
+                                'prompt_count': p['prompt_count']
+                            })
+                    final_results.sort(key=lambda x: x['total_score'], reverse=True)
+                    emit('game_over', {
+                        'results': final_results
+                    }, room=player['socket_id'])
         
         # Update player_sessions mapping
         player_sessions[request.sid] = session_id
@@ -1738,10 +1769,10 @@ def start_voting_on_images():
     # Get target image for this round
     target_image = game_state.get('current_target', {})
 
-    # Send images to each player with their own session_id for filtering (non-admin only)
+    # Send images to each player with their own session_id for filtering (non-admin only) - broadcast to all connected players
     for target_session_id in players.keys():
         player = players[target_session_id]
-        if not player['is_admin']:
+        if not player['is_admin'] and player.get('socket_id'):
             emit('vote_on_images', {
                 'images': selected_images,
                 'round': current_round,
@@ -1843,9 +1874,9 @@ def show_round_results():
     # Sort by total score for overall leaderboard
     results.sort(key=lambda x: x['total_score'], reverse=True)
 
-    # Send to players only (not admin)
+    # Send to players only (not admin) - broadcast to all connected players
     for p in players.values():
-        if not p['is_admin']:
+        if not p['is_admin'] and p.get('socket_id'):
             emit('round_results', {
                 'round': current_round,
                 'results': results
@@ -1902,9 +1933,9 @@ def handle_next_round():
                 p['has_successful_prompt'][round_num] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round {round_num}")
 
-        # Send game started to players only (not admin)
+        # Send game started to players only (not admin) - broadcast to all connected players
         for p in players.values():
-            if not p['is_admin']:
+            if not p['is_admin'] and p.get('socket_id'):
                 # Determine character for this round
                 character = get_character_for_round(p, game_state['current_round'])
                 character_data = {
@@ -1918,9 +1949,9 @@ def handle_next_round():
                     character_data['animation_state'] = 'smiling'
                     character_data['prompt_count'] = 0
 
-        emit('game_started', {
-            'round': game_state['current_round'],
-            'target': game_state['current_target'],
+                emit('game_started', {
+                    'round': game_state['current_round'],
+                    'target': game_state['current_target'],
                     'end_time': game_state['round_end_time'],
                     'character': character_data
                 }, room=p['socket_id'])
@@ -1968,9 +1999,9 @@ def end_game():
 
     final_results.sort(key=lambda x: x['total_score'], reverse=True)
 
-    # Send to players only (not admin)
+    # Send to players only (not admin) - broadcast to all connected players
     for p in players.values():
-        if not p['is_admin']:
+        if not p['is_admin'] and p.get('socket_id'):
             emit('game_over', {
                 'results': final_results
             }, room=p['socket_id'])
@@ -2349,9 +2380,9 @@ def next_round_console():
                     p['prompt_count'] = 0
                     p['has_successful_prompt'][round_num] = False
 
-            # Send game started to players only (not admin)
+            # Send game started to players only (not admin) - broadcast to all connected players
             for p in players.values():
-                if not p['is_admin']:
+                if not p['is_admin'] and p.get('socket_id'):
                     character = get_character_for_round(p, game_state['current_round'])
                     character_data = {
                         'character': character,
