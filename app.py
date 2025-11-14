@@ -573,53 +573,53 @@ def handle_join_game(data):
         lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
     
     # Send game state to player
-        # Admin gets different view - they don't play
-        if player['is_admin']:
-            emit('admin_joined', {
-                'is_admin': True,
-                'players': [{
-                    'name': p.get('display_name', p['name']),  # Use display_name
-                    'team': p['team'],
-                    'is_admin': p['is_admin'],
-                    'is_connected': p.get('socket_id') is not None,
-                    'session_id': p['session_id']
-                } for p in players.values()]
-            }, room=player['socket_id'])
-        else:
-    emit('game_joined', {
-        'player': {
-                    'name': player.get('display_name', player['name']),  # Use display_name
-            'team': player['team'],
-            'character': player['character'],
-            'score': player['score'],
-            'is_admin': player['is_admin']
-        },
-        'game_state': {
-            'status': game_state['status'],
-            'current_round': game_state['current_round'],
-            'current_target': game_state['current_target'],
-                    'players_count': len([p for p in players.values() if not p['is_admin']])
-        },
-        'lobby_players': lobby_players
-            }, room=player['socket_id'])
+    # Admin gets different view - they don't play
+    if player['is_admin']:
+        emit('admin_joined', {
+            'is_admin': True,
+            'players': [{
+                'name': p.get('display_name', p['name']),  # Use display_name
+                'team': p['team'],
+                'is_admin': p['is_admin'],
+                'is_connected': p.get('socket_id') is not None,
+                'session_id': p['session_id']
+            } for p in players.values()]
+        }, room=player['socket_id'])
+    else:
+        emit('game_joined', {
+            'player': {
+                'name': player.get('display_name', player['name']),  # Use display_name
+                'team': player['team'],
+                'character': player['character'],
+                'score': player['score'],
+                'is_admin': player['is_admin']
+            },
+            'game_state': {
+                'status': game_state['status'],
+                'current_round': game_state['current_round'],
+                'current_target': game_state['current_target'],
+                'players_count': len([p for p in players.values() if not p['is_admin']])
+            },
+            'lobby_players': lobby_players
+        }, room=player['socket_id'])
 
     # Broadcast player list update to all
     emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
 
-        # Also push an admin-specific player status update so the dashboard stays in sync
-        if admin_session_id in players and players[admin_session_id].get('socket_id'):
-            emit('player_status_update', {
-                'players': [{
-                    'name': p.get('display_name', p['name']),
-                    'team': p['team'],
-                    'is_admin': p['is_admin'],
-                    'is_connected': p.get('socket_id') is not None,
-                    'session_id': p['session_id'],
-                    'prompts_submitted': len(p['images'].get(game_state.get('current_round', 0), [])) if game_state.get('current_round') else 0,
-                    'has_selected': (game_state.get('current_round') in p['selected_images']) if game_state.get('current_round') else False,
-                    'has_voted': p['has_voted'].get(game_state.get('current_round', 0), False) if game_state.get('current_round') else False,
-                } for p in players.values()]
-            }, room=players[admin_session_id]['socket_id'])
+    # Also push an admin-specific player status update so the dashboard stays in sync
+    if admin_session_id in players and players[admin_session_id].get('socket_id'):
+        emit('player_status_update', {
+            'players': [{
+                'name': p.get('display_name', p['name']),
+                'team': p['team'],
+                'is_admin': p['is_admin'],
+                'is_connected': p.get('socket_id') is not None,
+                'session_id': p['session_id'],
+                'prompts_submitted': len(p['images'].get(game_state.get('current_round', 0), [])) if game_state.get('current_round') else 0,
+                'has_selected': (game_state.get('current_round') in p['selected_images']) if game_state.get('current_round') else False,
+                'has_voted': p['has_voted'].get(game_state.get('current_round', 0), False) if game_state.get('current_round') else False,
+            } for p in players.values()]
+        }, room=players[admin_session_id]['socket_id'])
 
     print(f"Player {player.get('display_name', player_name)} joined (Admin: {player['is_admin']})")
 
@@ -766,7 +766,7 @@ def handle_start_game():
         # Reset current images and prompt count for all players at start of round
         for p in players.values():
             if not p['is_admin']:
-            p['current_image'][1] = None
+                p['current_image'][1] = None
                 p['prompt_count'] = 0  # Reset prompt count for avatar state
                 p['has_successful_prompt'][1] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round 1")
@@ -1376,7 +1376,7 @@ def get_character_message(player, current_round):
         if prompt_count <= len(BUDDY_MESSAGES):
             message_index = prompt_count - 1
             return BUDDY_MESSAGES[message_index]
-    else:
+        else:
             # For 16+ prompts, repeat the last message
             return BUDDY_MESSAGES[-1]
     
@@ -1553,7 +1553,7 @@ def start_voting_phase():
             socket_id = p.get('socket_id')
             if socket_id:
                 print(f"[VOTING] Emitting voting_started to player {p['name']} (socket: {socket_id})")
-    emit('voting_started', {
+                emit('voting_started', {
                     'round': current_round,
                     'duration': selection_duration,
                     'start_time': selection_start_time,  # Synchronized start time
@@ -1742,9 +1742,9 @@ def start_voting_on_images():
     for target_session_id in players.keys():
         player = players[target_session_id]
         if not player['is_admin']:
-        emit('vote_on_images', {
-            'images': selected_images,
-            'round': current_round,
+            emit('vote_on_images', {
+                'images': selected_images,
+                'round': current_round,
                 'my_session_id': target_session_id,
                 'target_image': {
                     'url': target_image.get('url', '')
@@ -1829,16 +1829,16 @@ def show_round_results():
     results = []
     for session_id, player in players.items():
         if not player['is_admin']:  # Exclude admin from results
-        votes = player['votes_received'][current_round]
-        player['round_scores'][current_round - 1] = votes
-        player['score'] += votes
+            votes = player['votes_received'][current_round]
+            player['round_scores'][current_round - 1] = votes
+            player['score'] += votes
 
-        results.append({
+            results.append({
                 'player_name': player.get('display_name', player['name']),
-            'votes': votes,
-            'total_score': player['score'],
-            'image': player['selected_images'].get(current_round, {}).get('image_data', '')
-        })
+                'votes': votes,
+                'total_score': player['score'],
+                'image': player['selected_images'].get(current_round, {}).get('image_data', '')
+            })
 
     # Sort by total score for overall leaderboard
     results.sort(key=lambda x: x['total_score'], reverse=True)
@@ -1846,25 +1846,25 @@ def show_round_results():
     # Send to players only (not admin)
     for p in players.values():
         if not p['is_admin']:
-    emit('round_results', {
-        'round': current_round,
-        'results': results
+            emit('round_results', {
+                'round': current_round,
+                'results': results
             }, room=p['socket_id'])
     
     # Send admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-                emit('admin_round_results', {
-                'round': current_round,
-                'results': results,
-                'players': [{
-                    'name': p.get('display_name', p['name']),
-                    'team': p['team'],
-                    'is_connected': p.get('socket_id') is not None,
-                    'session_id': p['session_id'],
-                    'score': p['score'],
-                    'prompts_submitted': len(p['images'].get(current_round, []))
-                } for p in players.values() if not p['is_admin']]
-            }, room=players[admin_session_id]['socket_id'])
+        emit('admin_round_results', {
+            'round': current_round,
+            'results': results,
+            'players': [{
+                'name': p.get('display_name', p['name']),
+                'team': p['team'],
+                'is_connected': p.get('socket_id') is not None,
+                'session_id': p['session_id'],
+                'score': p['score'],
+                'prompts_submitted': len(p['images'].get(current_round, []))
+            } for p in players.values() if not p['is_admin']]
+        }, room=players[admin_session_id]['socket_id'])
 
     print(f"Round {current_round} results shown")
 
@@ -1897,7 +1897,7 @@ def handle_next_round():
         round_num = game_state['current_round']
         for p in players.values():
             if not p['is_admin']:
-            p['current_image'][round_num] = None
+                p['current_image'][round_num] = None
                 p['prompt_count'] = 0  # Reset prompt count for avatar state
                 p['has_successful_prompt'][round_num] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round {round_num}")
@@ -1957,22 +1957,22 @@ def end_game():
     final_results = []
     for session_id, player in players.items():
         if not player['is_admin']:  # Exclude admin from leaderboard
-        final_results.append({
+            final_results.append({
                 'player_name': player.get('display_name', player['name']),
-            'total_score': player['score'],
-            'round_scores': player['round_scores'],
-            'team': player['team'],
-            'character': player['character'],
-            'prompt_count': player['prompt_count']
-        })
+                'total_score': player['score'],
+                'round_scores': player['round_scores'],
+                'team': player['team'],
+                'character': player['character'],
+                'prompt_count': player['prompt_count']
+            })
 
     final_results.sort(key=lambda x: x['total_score'], reverse=True)
 
     # Send to players only (not admin)
     for p in players.values():
         if not p['is_admin']:
-    emit('game_over', {
-        'results': final_results
+            emit('game_over', {
+                'results': final_results
             }, room=p['socket_id'])
     
     # Send admin view
