@@ -1769,10 +1769,11 @@ def start_voting_on_images():
     # Get target image for this round
     target_image = game_state.get('current_target', {})
 
-    # Send images to each player with their own session_id for filtering (non-admin only) - broadcast to all connected players
+    # Send images to each player with their own session_id for filtering (non-admin only)
+    # Socket.IO will ignore if socket_id is None
     for target_session_id in players.keys():
         player = players[target_session_id]
-        if not player['is_admin'] and player.get('socket_id'):
+        if not player['is_admin']:
             emit('vote_on_images', {
                 'images': selected_images,
                 'round': current_round,
@@ -1780,7 +1781,7 @@ def start_voting_on_images():
                 'target_image': {
                     'url': target_image.get('url', '')
                 }
-            }, room=player['socket_id'])
+            }, room=player.get('socket_id'))  # None is fine - Socket.IO will ignore
 
     print("Players now voting on images")
 
@@ -1874,13 +1875,13 @@ def show_round_results():
     # Sort by total score for overall leaderboard
     results.sort(key=lambda x: x['total_score'], reverse=True)
 
-    # Send to players only (not admin) - broadcast to all connected players
+    # Send to players only (not admin) - Socket.IO will ignore if socket_id is None
     for p in players.values():
-        if not p['is_admin'] and p.get('socket_id'):
+        if not p['is_admin']:
             emit('round_results', {
                 'round': current_round,
                 'results': results
-            }, room=p['socket_id'])
+            }, room=p.get('socket_id'))  # None is fine - Socket.IO will ignore
     
     # Send admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -1933,9 +1934,9 @@ def handle_next_round():
                 p['has_successful_prompt'][round_num] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round {round_num}")
 
-        # Send game started to players only (not admin) - broadcast to all connected players
+        # Send game started to players only (not admin) - Socket.IO will ignore if socket_id is None
         for p in players.values():
-            if not p['is_admin'] and p.get('socket_id'):
+            if not p['is_admin']:
                 # Determine character for this round
                 character = get_character_for_round(p, game_state['current_round'])
                 character_data = {
@@ -1954,7 +1955,7 @@ def handle_next_round():
                     'target': game_state['current_target'],
                     'end_time': game_state['round_end_time'],
                     'character': character_data
-                }, room=p['socket_id'])
+                }, room=p.get('socket_id'))  # None is fine - Socket.IO will ignore
         
         # Send admin game started event with player status
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -1999,12 +2000,12 @@ def end_game():
 
     final_results.sort(key=lambda x: x['total_score'], reverse=True)
 
-    # Send to players only (not admin) - broadcast to all connected players
+    # Send to players only (not admin) - Socket.IO will ignore if socket_id is None
     for p in players.values():
-        if not p['is_admin'] and p.get('socket_id'):
+        if not p['is_admin']:
             emit('game_over', {
                 'results': final_results
-            }, room=p['socket_id'])
+            }, room=p.get('socket_id'))  # None is fine - Socket.IO will ignore
     
     # Send admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -2380,9 +2381,9 @@ def next_round_console():
                     p['prompt_count'] = 0
                     p['has_successful_prompt'][round_num] = False
 
-            # Send game started to players only (not admin) - broadcast to all connected players
+            # Send game started to players only (not admin) - Socket.IO will ignore if socket_id is None
             for p in players.values():
-                if not p['is_admin'] and p.get('socket_id'):
+                if not p['is_admin']:
                     character = get_character_for_round(p, game_state['current_round'])
                     character_data = {
                         'character': character,
@@ -2400,7 +2401,7 @@ def next_round_console():
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
                         'character': character_data
-                    }, room=p['socket_id'])
+                    }, room=p.get('socket_id'))  # None is fine - Socket.IO will ignore
             
             # Send admin game started event
             if admin_session_id in players and players[admin_session_id].get('socket_id'):
