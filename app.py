@@ -31,6 +31,7 @@ game_state = {
     'round_start_time': None,
     'round_end_time': None,
     'voting_start_time': None,
+    'voting_active_players': [],  # Track players active when voting started
     'game_id': None,  # Database game_id
     'round_id': None,  # Current round's database round_id
     'target_images': [
@@ -263,7 +264,7 @@ def handle_disconnect():
                         'session_id': p['session_id']
                     } for p in players.values()]
                 }, room=players[admin_session_id]['socket_id'])
-            print(f"Player {player['name']} disconnected")
+        print(f"Player {player['name']} disconnected")
 
     if request.sid in player_sessions:
         del player_sessions[request.sid]
@@ -287,17 +288,29 @@ def handle_join_game(data):
         player = players[session_id]
         player['socket_id'] = request.sid  # Update socket_id on reconnection
         
-        # If reconnecting with admin code and no admin exists, become admin
-        if is_admin_code and admin_session_id is None and required_admin_code:
-            admin_session_id = session_id
-            player['is_admin'] = True
-            player['name'] = player_name  # Store actual name (code)
-            player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
-            print(f"Player {player_name} reconnected as ADMIN (code verified)")
-        elif is_admin_code and player['is_admin'] and session_id == admin_session_id:
-            # Admin reconnecting with admin code - ensure display_name is correct
-            player['name'] = player_name  # Update internal name (code)
-            player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
+        # If reconnecting with admin code, check if we should become/remain admin
+        if is_admin_code and required_admin_code:
+            # Check if current admin is disconnected (no socket_id)
+            current_admin_disconnected = (admin_session_id is not None and 
+                                        admin_session_id in players and 
+                                        players[admin_session_id].get('socket_id') is None)
+            
+            if admin_session_id is None or current_admin_disconnected:
+                # No admin exists or old admin is disconnected - become admin
+                if admin_session_id is not None and current_admin_disconnected:
+                    # Remove admin status from old admin
+                    old_admin = players[admin_session_id]
+                    old_admin['is_admin'] = False
+                    print(f"Admin {old_admin.get('display_name', old_admin['name'])} disconnected, transferring admin to {player_name}")
+                admin_session_id = session_id
+                player['is_admin'] = True
+                player['name'] = player_name  # Store actual name (code)
+                player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
+                print(f"Player {player_name} reconnected as ADMIN (code verified)")
+            elif player['is_admin'] and session_id == admin_session_id:
+                # Admin reconnecting with admin code - ensure display_name is correct
+                player['name'] = player_name  # Update internal name (code)
+                player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
         else:
             # Update name (but preserve display_name if admin)
             if player['is_admin']:
@@ -377,15 +390,36 @@ def handle_join_game(data):
                                 'error_type': img_data.get('error_type'),  # Include error info for filtering
                                 'file_size_kb': img_data.get('file_size_kb')
                             }, room=player['socket_id'])
-                elif game_state['status'] == 'voting':
-                    # Include synchronized start time for timer synchronization
-                    selection_start_time = game_state.get('voting_start_time', time.time())
-                    emit('voting_started', {
-                        'round': current_round,
-                        'duration': game_state.get('voting_duration', 30),
-                        'start_time': selection_start_time,  # Synchronized start time
-                        'default_selected': current_round in player['selected_images']
-                    }, room=player['socket_id'])
+                elif game_state['status'] in ['playing', 'voting']:
+                    # Restore their generated images for both playing and voting states
+                    # This ensures reconnected players get their images restored properly
+                    if player['images'].get(current_round):
+                        restored_count = 0
+                        for img_data in player['images'][current_round]:
+                            # Only restore images that have valid data (not just placeholders)
+                            if img_data.get('image_data') or img_data.get('prompt_id'):
+                                emit('image_generated', {
+                                    'image_data': img_data.get('image_data', ''),
+                                    'ai_response': img_data.get('ai_response', ''),
+                                    'prompt': img_data.get('prompt', ''),
+                                    'image_index': player['images'][current_round].index(img_data),
+                                    'prompt_id': img_data.get('prompt_id'),
+                                    'error_type': img_data.get('error_type'),  # Include error info for filtering
+                                    'file_size_kb': img_data.get('file_size_kb')
+                                }, room=player['socket_id'])
+                                restored_count += 1
+                        print(f"[RECONNECT] Restored {restored_count} images for player {player.get('display_name', player['name'])} in round {current_round} (status: {game_state['status']})")
+                    
+                    # If in voting state, also send voting_started event
+                    if game_state['status'] == 'voting':
+                        # Include synchronized start time for timer synchronization
+                        selection_start_time = game_state.get('voting_start_time', time.time())
+                        emit('voting_started', {
+                            'round': current_round,
+                            'duration': game_state.get('voting_duration', 30),
+                            'start_time': selection_start_time,  # Synchronized start time
+                            'default_selected': current_round in player['selected_images']
+                        }, room=player['socket_id'])
                 elif game_state['status'] == 'voting_images':
                     # Send voting screen
                     selected_images = []
@@ -462,9 +496,21 @@ def handle_join_game(data):
             final_display_name = 'Gamemaster'  # Always show as Gamemaster
             print(f"Player {player_name} joined as ADMIN (code verified)")
         elif is_admin_code and admin_session_id is not None:
-            # Admin code used but admin already exists
-            emit('error', {'message': 'Admin already exists. Please use a different name.'})
-            return
+            # Admin code used but admin already exists - check if old admin is disconnected
+            current_admin_disconnected = (admin_session_id in players and 
+                                        players[admin_session_id].get('socket_id') is None)
+            if current_admin_disconnected:
+                # Old admin is disconnected - allow takeover
+                old_admin = players[admin_session_id]
+                old_admin['is_admin'] = False
+                admin_session_id = session_id
+                is_new_admin = True
+                final_display_name = 'Gamemaster'
+                print(f"Admin {old_admin.get('display_name', old_admin['name'])} disconnected, new admin {player_name} taking over")
+            else:
+                # Admin already exists and is connected
+                emit('error', {'message': 'Admin already exists. Please use a different name.'})
+                return
         elif admin_session_id is None and not required_admin_code:
             # Fallback: first player becomes admin if no code configured
             admin_session_id = session_id
@@ -472,9 +518,29 @@ def handle_join_game(data):
             final_display_name = 'Gamemaster'  # Show as Gamemaster even in fallback
             print(f"Player {player_name} joined as ADMIN (first player, no code configured)")
         
-        # New players don't get a team until admin assigns teams
+        # Check if this player exists in the database for the current game (reconnection with lost session)
+        # Uses case-insensitive matching
         team = None
         character = None
+        restored_player_id = None
+        
+        if not is_new_admin and game_state.get('game_id') and db.is_configured():
+            existing_player = db.get_player_by_name_and_game(player_name, game_state['game_id'])
+            if existing_player:
+                # Player exists in database - restore their team assignment
+                restored_player_id = existing_player.get('player_id')
+                team = existing_player.get('team')
+                character = existing_player.get('character')
+                print(f"🔄 Restored player {player_name} from database: team={team}, old_id={restored_player_id}, new_id={session_id}")
+                
+                # Update database to use new session_id
+                db.create_player(
+                    game_id=game_state['game_id'],
+                    player_id=session_id,
+                    player_name=player_name,
+                    team=team,
+                    character=character
+                )
 
         player = {
             'session_id': session_id,
@@ -505,8 +571,8 @@ def handle_join_game(data):
     if game_state['status'] == 'lobby':
         # Use display_name for lobby (obscures admin code)
         lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
-        
-        # Send game state to player
+    
+    # Send game state to player
         # Admin gets different view - they don't play
         if player['is_admin']:
             emit('admin_joined', {
@@ -520,25 +586,25 @@ def handle_join_game(data):
                 } for p in players.values()]
             }, room=player['socket_id'])
         else:
-            emit('game_joined', {
-                'player': {
+    emit('game_joined', {
+        'player': {
                     'name': player.get('display_name', player['name']),  # Use display_name
-                    'team': player['team'],
-                    'character': player['character'],
-                    'score': player['score'],
-                    'is_admin': player['is_admin']
-                },
-                'game_state': {
-                    'status': game_state['status'],
-                    'current_round': game_state['current_round'],
-                    'current_target': game_state['current_target'],
+            'team': player['team'],
+            'character': player['character'],
+            'score': player['score'],
+            'is_admin': player['is_admin']
+        },
+        'game_state': {
+            'status': game_state['status'],
+            'current_round': game_state['current_round'],
+            'current_target': game_state['current_target'],
                     'players_count': len([p for p in players.values() if not p['is_admin']])
-                },
-                'lobby_players': lobby_players
+        },
+        'lobby_players': lobby_players
             }, room=player['socket_id'])
 
-        # Broadcast player list update to all
-        emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+    # Broadcast player list update to all
+    emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
 
         # Also push an admin-specific player status update so the dashboard stays in sync
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -700,7 +766,7 @@ def handle_start_game():
         # Reset current images and prompt count for all players at start of round
         for p in players.values():
             if not p['is_admin']:
-                p['current_image'][1] = None
+            p['current_image'][1] = None
                 p['prompt_count'] = 0  # Reset prompt count for avatar state
                 p['has_successful_prompt'][1] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round 1")
@@ -720,10 +786,10 @@ def handle_start_game():
                     character_data['plant_state'] = 'base'
                     character_data['animation_state'] = 'smiling'
                     character_data['prompt_count'] = 0
-                
-                emit('game_started', {
-                    'round': 1,
-                    'target': game_state['current_target'],
+
+        emit('game_started', {
+            'round': 1,
+            'target': game_state['current_target'],
                     'end_time': game_state['round_end_time'],
                     'character': character_data
                 }, room=p['socket_id'])
@@ -1310,7 +1376,7 @@ def get_character_message(player, current_round):
         if prompt_count <= len(BUDDY_MESSAGES):
             message_index = prompt_count - 1
             return BUDDY_MESSAGES[message_index]
-        else:
+    else:
             # For 16+ prompts, repeat the last message
             return BUDDY_MESSAGES[-1]
     
@@ -1456,6 +1522,13 @@ def start_voting_phase():
     game_state['status'] = 'voting'
     game_state['voting_start_time'] = time.time()
     game_state['voting_duration'] = 30  # 30 seconds to select
+    
+    # Track which players were active when voting started (for voting completion check)
+    # This ensures we wait for all players who were present at voting start, even if they disconnect
+    game_state['voting_active_players'] = [p['session_id'] for p in players.values() 
+                                          if not p.get('is_admin') and p.get('socket_id')]
+    print(f"[VOTING] Tracked {len(game_state['voting_active_players'])} active players at voting start: {game_state['voting_active_players']}")
+    
     print(f"[VOTING] Status set to 'voting', will emit voting_started to players")
     
     # End current round in database
@@ -1480,7 +1553,7 @@ def start_voting_phase():
             socket_id = p.get('socket_id')
             if socket_id:
                 print(f"[VOTING] Emitting voting_started to player {p['name']} (socket: {socket_id})")
-                emit('voting_started', {
+    emit('voting_started', {
                     'round': current_round,
                     'duration': selection_duration,
                     'start_time': selection_start_time,  # Synchronized start time
@@ -1535,19 +1608,34 @@ def handle_select_image(data):
 
     if image_index < len(player['images'][current_round]):
         selected_image = player['images'][current_round][image_index]
+        
+        # Server-side validation: Prevent selecting error images
+        if selected_image.get('error_type'):
+            print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select error image (error_type: {selected_image.get('error_type')}) in round {current_round}. Rejecting selection.")
+            emit('image_selected', {'success': False, 'error': 'Cannot select error image. Please choose a valid image.'})
+            return
+        
+        # Server-side validation: Prevent selecting images without prompt_id
+        prompt_id = selected_image.get('prompt_id')
+        if not prompt_id:
+            print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select image without prompt_id in round {current_round}. Rejecting selection.")
+            emit('image_selected', {'success': False, 'error': 'Cannot select image without valid prompt_id. Please choose a different image.'})
+            return
+        
         player['selected_images'][current_round] = selected_image
         player['has_confirmed_selection'][current_round] = True  # Mark as confirmed
         
         # Save image selection to database
         if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-            prompt_id = selected_image.get('prompt_id')
-            if prompt_id:
-                db.save_image_selection(
-                    player_id=session_id,
-                    round_id=game_state['round_id'],
-                    game_id=game_state['game_id'],
-                    prompt_id=prompt_id
-                )
+            db.save_image_selection(
+                player_id=session_id,
+                round_id=game_state['round_id'],
+                game_id=game_state['game_id'],
+                prompt_id=prompt_id
+            )
+            print(f"✅ Saved image selection for player {player.get('display_name', player['name'])} in round {current_round}, prompt_id={prompt_id}")
+        else:
+            print(f"⚠️ WARNING: Cannot save image selection - database not configured or missing game_id/round_id")
         
         emit('image_selected', {'success': True})
 
@@ -1573,32 +1661,31 @@ def check_all_selected():
         print(f"[SELECTION] Time elapsed ({time_elapsed:.1f}s >= {duration}s), auto-selecting last valid image for players who haven't selected")
         for player in active_players:
             if current_round not in player['selected_images'] and player['images'].get(current_round):
-                # Find the last valid (non-error) image
-                valid_images = [img for img in player['images'][current_round] if not img.get('error_type')]
+                # Find the last valid (non-error) image with a valid prompt_id
+                valid_images = [img for img in player['images'][current_round] 
+                              if not img.get('error_type') and img.get('prompt_id') is not None]
                 if valid_images:
                     last_valid_image = valid_images[-1]
                     player['selected_images'][current_round] = last_valid_image
-                else:
-                    # Fallback: use last image even if it has an error (shouldn't happen, but safety)
-                    last_image = player['images'][current_round][-1]
-                    player['selected_images'][current_round] = last_image
-                
-                # Mark as confirmed when auto-selected (timer expired)
-                player['has_confirmed_selection'][current_round] = True
-                
-                # Save to database
-                if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-                    selected_image = player['selected_images'][current_round]
-                    prompt_id = selected_image.get('prompt_id')
-                    if prompt_id:
+                    player['has_confirmed_selection'][current_round] = True
+                    
+                    # Save to database
+                    if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+                        prompt_id = last_valid_image.get('prompt_id')
                         db.save_image_selection(
                             player_id=player['session_id'],
                             round_id=game_state['round_id'],
                             game_id=game_state['game_id'],
                             prompt_id=prompt_id
                         )
-                
-                print(f"[SELECTION] Auto-selected last image for player {player['name']}")
+                        print(f"[SELECTION] Auto-selected valid image (prompt_id={prompt_id}) for player {player['name']}")
+                    else:
+                        print(f"[SELECTION] Auto-selected valid image for player {player['name']} (database save skipped - not configured)")
+                else:
+                    # No valid images available - log error and don't auto-select
+                    print(f"❌ ERROR: Player {player['name']} has no valid images (no error_type and prompt_id) to auto-select in round {current_round}. Total images: {len(player['images'][current_round])}")
+                    # Don't mark as confirmed - let admin handle this edge case
+                    # The game will be stuck, but this is better than selecting an error image
     
     # Check if all players have now confirmed their selection (either manually or via timer expiry)
     all_selected = all(
@@ -1627,6 +1714,14 @@ def handle_check_selection_status():
 def start_voting_on_images():
     game_state['status'] = 'voting_images'
     current_round = game_state['current_round']
+    
+    # Track which players were active when voting on images started
+    # This ensures we wait for all players who were present at voting start, even if they disconnect
+    if not game_state.get('voting_active_players'):
+        # Only set if not already set (from selection phase)
+        game_state['voting_active_players'] = [p['session_id'] for p in players.values() 
+                                              if not p.get('is_admin') and p.get('socket_id')]
+        print(f"[VOTING] Tracked {len(game_state['voting_active_players'])} active players at voting start: {game_state['voting_active_players']}")
 
     # Gather all selected images with prompt_id (exclude admin)
     selected_images = []
@@ -1647,9 +1742,9 @@ def start_voting_on_images():
     for target_session_id in players.keys():
         player = players[target_session_id]
         if not player['is_admin']:
-            emit('vote_on_images', {
-                'images': selected_images,
-                'round': current_round,
+        emit('vote_on_images', {
+            'images': selected_images,
+            'round': current_round,
                 'my_session_id': target_session_id,
                 'target_image': {
                     'url': target_image.get('url', '')
@@ -1695,32 +1790,55 @@ def handle_cast_vote(data):
 
 def check_voting_complete():
     current_round = game_state['current_round']
-    # Only count active players (those who haven't left/disconnected)
-    active_players = [p for p in players.values() if p.get('socket_id')]
-    votes_cast = sum(1 for p in active_players if p['has_voted'][current_round])
-    active_count = len(active_players)
+    
+    # Use the list of players who were active when voting started
+    # This ensures we wait for all players who were present at voting start, even if they disconnect
+    voting_start_players = game_state.get('voting_active_players', [])
+    
+    if not voting_start_players:
+        # Fallback: if voting_active_players wasn't set, use current active players
+        voting_start_players = [p['session_id'] for p in players.values() 
+                               if not p.get('is_admin') and p.get('socket_id')]
+        print(f"[VOTING] WARNING: voting_active_players not set, using current active players: {voting_start_players}")
+    
+    # Count votes from players who were active at voting start
+    votes_cast = 0
+    for session_id in voting_start_players:
+        if session_id in players:
+            player = players[session_id]
+            if player['has_voted'].get(current_round, False):
+                votes_cast += 1
+    
+    total_expected = len(voting_start_players)
+    
+    print(f"[VOTING] Progress: {votes_cast}/{total_expected} players have voted (from voting start list)")
 
-    if active_count > 0 and (votes_cast >= active_count * 0.66 or votes_cast == active_count):
+    # Require 100% of players who were active at voting start to vote before progressing
+    if total_expected > 0 and votes_cast == total_expected:
+        print(f"[VOTING] All {total_expected} players have voted, showing results")
         show_round_results()
 
 def show_round_results():
     game_state['status'] = 'round_results'
     current_round = game_state['current_round']
+    
+    # Clear voting_active_players when round results are shown
+    game_state['voting_active_players'] = []
 
     # Calculate scores (exclude admin)
     results = []
     for session_id, player in players.items():
         if not player['is_admin']:  # Exclude admin from results
-            votes = player['votes_received'][current_round]
-            player['round_scores'][current_round - 1] = votes
-            player['score'] += votes
+        votes = player['votes_received'][current_round]
+        player['round_scores'][current_round - 1] = votes
+        player['score'] += votes
 
-            results.append({
+        results.append({
                 'player_name': player.get('display_name', player['name']),
-                'votes': votes,
-                'total_score': player['score'],
-                'image': player['selected_images'].get(current_round, {}).get('image_data', '')
-            })
+            'votes': votes,
+            'total_score': player['score'],
+            'image': player['selected_images'].get(current_round, {}).get('image_data', '')
+        })
 
     # Sort by total score for overall leaderboard
     results.sort(key=lambda x: x['total_score'], reverse=True)
@@ -1728,9 +1846,9 @@ def show_round_results():
     # Send to players only (not admin)
     for p in players.values():
         if not p['is_admin']:
-            emit('round_results', {
-                'round': current_round,
-                'results': results
+    emit('round_results', {
+        'round': current_round,
+        'results': results
             }, room=p['socket_id'])
     
     # Send admin view
@@ -1779,7 +1897,7 @@ def handle_next_round():
         round_num = game_state['current_round']
         for p in players.values():
             if not p['is_admin']:
-                p['current_image'][round_num] = None
+            p['current_image'][round_num] = None
                 p['prompt_count'] = 0  # Reset prompt count for avatar state
                 p['has_successful_prompt'][round_num] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round {round_num}")
@@ -1799,10 +1917,10 @@ def handle_next_round():
                     character_data['plant_state'] = 'base'
                     character_data['animation_state'] = 'smiling'
                     character_data['prompt_count'] = 0
-                
-                emit('game_started', {
-                    'round': game_state['current_round'],
-                    'target': game_state['current_target'],
+
+        emit('game_started', {
+            'round': game_state['current_round'],
+            'target': game_state['current_target'],
                     'end_time': game_state['round_end_time'],
                     'character': character_data
                 }, room=p['socket_id'])
@@ -1830,7 +1948,7 @@ def handle_next_round():
 
 def end_game():
     game_state['status'] = 'game_over'
-    
+
     # Mark game as ended in database
     if db.is_configured() and game_state.get('game_id'):
         db.end_game(game_id=game_state['game_id'], rounds_completed=3)
@@ -1839,22 +1957,22 @@ def end_game():
     final_results = []
     for session_id, player in players.items():
         if not player['is_admin']:  # Exclude admin from leaderboard
-            final_results.append({
+        final_results.append({
                 'player_name': player.get('display_name', player['name']),
-                'total_score': player['score'],
-                'round_scores': player['round_scores'],
-                'team': player['team'],
-                'character': player['character'],
-                'prompt_count': player['prompt_count']
-            })
+            'total_score': player['score'],
+            'round_scores': player['round_scores'],
+            'team': player['team'],
+            'character': player['character'],
+            'prompt_count': player['prompt_count']
+        })
 
     final_results.sort(key=lambda x: x['total_score'], reverse=True)
 
     # Send to players only (not admin)
     for p in players.values():
         if not p['is_admin']:
-            emit('game_over', {
-                'results': final_results
+    emit('game_over', {
+        'results': final_results
             }, room=p['socket_id'])
     
     # Send admin view
@@ -1972,7 +2090,7 @@ def handle_admin_end_round():
 
 @socketio.on('restart_game')
 def handle_restart_game():
-    """Admin-only: Restart game for everyone"""
+    """Admin-only: Restart game for everyone, kick all non-admin players, and create a new game_id"""
     global admin_session_id
     session_id = session.get('session_id')
     
@@ -1981,35 +2099,55 @@ def handle_restart_game():
         emit('error', {'message': 'Only admin can restart game'})
         return
     
-    # Reset game state
+    # End current game in database if one exists
+    if db.is_configured() and game_state.get('game_id'):
+        current_round = game_state.get('current_round', 0)
+        if current_round > 0:
+            # Mark game as ended with rounds completed
+            db.end_game(game_id=game_state['game_id'], rounds_completed=current_round)
+            print(f"✅ Ended game {game_state['game_id']} in database before restart")
+        # End current round if one exists
+        if game_state.get('round_id'):
+            db.end_round(game_state['round_id'])
+            print(f"✅ Ended round {game_state['round_id']} in database before restart")
+    
+    # Reset game state (game_id will be None, so next start_game will create a new one)
     game_state['status'] = 'lobby'
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
-    game_state['game_id'] = None
+    game_state['voting_start_time'] = None
+    game_state['game_id'] = None  # This ensures a new game_id will be created on next start
     game_state['round_id'] = None
 
-    # Reset all players
-    for player in players.values():
-        player['score'] = 0
-        player['round_scores'] = [0, 0, 0]
-        player['images'] = {1: [], 2: [], 3: []}
-        player['selected_images'] = {}
-        player['has_confirmed_selection'] = {1: False, 2: False, 3: False}
-        player['votes_received'] = {1: 0, 2: 0, 3: 0}
-        player['has_voted'] = {1: False, 2: False, 3: False}
-        player['prompt_count'] = 0
-        player['has_successful_prompt'] = {1: False, 2: False, 3: False}
-        player['conversation_history'] = {1: [], 2: [], 3: []}
-        player['current_image'] = {1: None, 2: None, 3: None}
-        player['image_generation_errors'] = []  # Reset error tracking
-        # Reset team assignments (except admin)
-        if not player['is_admin']:
-            player['team'] = None
-            player['character'] = None
-
-    emit('game_restarted', broadcast=True)
-    print("Game restarted by admin")
+    # Kick ALL players including admin - remove them from the game and require them to rejoin
+    players_to_remove = []
+    for sess_id, player in list(players.items()):
+        players_to_remove.append(sess_id)
+        # Remove from player_sessions mapping
+        socket_ids_to_remove = [sid for sid, p_sess_id in player_sessions.items() if p_sess_id == sess_id]
+        for sid in socket_ids_to_remove:
+            if sid in player_sessions:
+                del player_sessions[sid]
+        # Notify player they've been kicked and need to rejoin
+        if player.get('socket_id'):
+            emit('game_restarted_kick', {
+                'message': 'The game has been restarted. Please rejoin to continue.'
+            }, room=player['socket_id'])
+    
+    # Remove all players from dictionary (including admin)
+    for sess_id in players_to_remove:
+        if sess_id in players:
+            del players[sess_id]
+    
+    # Clear admin_session_id
+    admin_session_id = None
+    
+    # Broadcast updated lobby (empty)
+    lobby_players = []
+    emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+    
+    print(f"🔄 Game restarted by admin - cleared all {len(players_to_remove)} players (including admin), new game_id will be created on next start")
 
 @socketio.on('back_to_home')
 def handle_back_to_home():
@@ -2148,6 +2286,189 @@ def handle_remove_player(data):
         }, room=players[admin_session_id]['socket_id'])
     
     print(f"Player {player_name} (session: {target_session_id}) removed by admin")
+
+# Console command functions for Railway admin controls
+# 
+# Usage from Railway console:
+#   python -c "from app import *; skip_selection()"
+#   python -c "from app import *; skip_voting_console()"
+#   python -c "from app import *; next_round_console()"
+#   python -c "from app import *; restart_game_console()"
+#
+# Or via HTTP POST (backup method):
+#   curl -X POST https://your-app.railway.app/admin/console/skip-selection
+#   curl -X POST https://your-app.railway.app/admin/console/skip-voting
+#   curl -X POST https://your-app.railway.app/admin/console/next-round
+#   curl -X POST https://your-app.railway.app/admin/console/restart-game
+def skip_selection():
+    """Console command: Skip selection screen and go to voting screen"""
+    if game_state['status'] == 'voting':
+        print("[CONSOLE] Skipping selection screen, advancing to voting on images")
+        start_voting_on_images()
+        return True
+    else:
+        print(f"[CONSOLE] Cannot skip selection - current status is {game_state['status']}, expected 'voting'")
+        return False
+
+def skip_voting_console():
+    """Console command: Skip voting screen and go to round results"""
+    if game_state['status'] == 'voting_images':
+        print("[CONSOLE] Skipping voting screen, advancing to round results")
+        show_round_results()
+        return True
+    else:
+        print(f"[CONSOLE] Cannot skip voting - current status is {game_state['status']}, expected 'voting_images'")
+        return False
+
+def next_round_console():
+    """Console command: Advance to next round or final leaderboard"""
+    if game_state['status'] == 'round_results':
+        if game_state['current_round'] < 3:
+            print(f"[CONSOLE] Advancing from round {game_state['current_round']} to next round")
+            # Reuse the existing handle_next_round logic
+            game_state['current_round'] += 1
+            game_state['status'] = 'playing'
+            game_state['current_target'] = game_state['target_images'][game_state['current_round'] - 1]
+            game_state['round_start_time'] = time.time()
+            game_state['round_end_time'] = game_state['round_start_time'] + 300
+
+            # Create new round in database
+            if db.is_configured() and game_state.get('game_id'):
+                round_id = db.create_round(
+                    game_id=game_state['game_id'],
+                    round_number=game_state['current_round']
+                )
+                if round_id:
+                    game_state['round_id'] = round_id
+
+            # Reset current images and prompt count for all players at start of new round
+            round_num = game_state['current_round']
+            for p in players.values():
+                if not p['is_admin']:
+                    p['current_image'][round_num] = None
+                    p['prompt_count'] = 0
+                    p['has_successful_prompt'][round_num] = False
+
+            # Send game started to players only (not admin)
+            for p in players.values():
+                if not p['is_admin']:
+                    character = get_character_for_round(p, game_state['current_round'])
+                    character_data = {
+                        'character': character,
+                        'round': game_state['current_round']
+                    }
+                    if character == 'Bud':
+                        character_data['animation_state'] = get_bud_animation_state()
+                    elif character == 'Spud':
+                        character_data['plant_state'] = 'base'
+                        character_data['animation_state'] = 'smiling'
+                        character_data['prompt_count'] = 0
+
+                    socketio.emit('game_started', {
+                        'round': game_state['current_round'],
+                        'target': game_state['current_target'],
+                        'end_time': game_state['round_end_time'],
+                        'character': character_data
+                    }, room=p['socket_id'])
+            
+            # Send admin game started event
+            if admin_session_id in players and players[admin_session_id].get('socket_id'):
+                time_remaining = game_state['round_end_time'] - time.time() if game_state.get('round_end_time') else None
+                socketio.emit('admin_game_started', {
+                    'round': game_state['current_round'],
+                    'target': game_state['current_target'],
+                    'time_remaining': time_remaining,
+                    'players': [{
+                        'name': p.get('display_name', p['name']),
+                        'team': p['team'],
+                        'is_connected': p.get('socket_id') is not None,
+                        'session_id': p['session_id'],
+                        'score': p['score'],
+                        'prompts_submitted': len(p['images'].get(game_state['current_round'], []))
+                    } for p in players.values() if not p['is_admin']]
+                }, room=players[admin_session_id]['socket_id'])
+            return True
+        else:
+            print("[CONSOLE] All rounds complete, advancing to final leaderboard")
+            end_game()
+            return True
+    else:
+        print(f"[CONSOLE] Cannot advance round - current status is {game_state['status']}, expected 'round_results'")
+        return False
+
+def restart_game_console():
+    """Console command: Restart game and clear all players including admin"""
+    print("[CONSOLE] Restarting game and clearing all players")
+    # End current game in database if one exists
+    if db.is_configured() and game_state.get('game_id'):
+        current_round = game_state.get('current_round', 0)
+        if current_round > 0:
+            db.end_game(game_id=game_state['game_id'], rounds_completed=current_round)
+        if game_state.get('round_id'):
+            db.end_round(game_state['round_id'])
+    
+    # Reset game state
+    game_state['status'] = 'lobby'
+    game_state['current_round'] = 0
+    game_state['round_start_time'] = None
+    game_state['round_end_time'] = None
+    game_state['voting_start_time'] = None
+    game_state['game_id'] = None
+    game_state['round_id'] = None
+
+    # Kick ALL players including admin
+    global admin_session_id
+    players_to_remove = []
+    for sess_id, player in list(players.items()):
+        players_to_remove.append(sess_id)
+        socket_ids_to_remove = [sid for sid, p_sess_id in player_sessions.items() if p_sess_id == sess_id]
+        for sid in socket_ids_to_remove:
+            if sid in player_sessions:
+                del player_sessions[sid]
+        if player.get('socket_id'):
+            socketio.emit('game_restarted_kick', {
+                'message': 'The game has been restarted. Please rejoin to continue.'
+            }, room=player['socket_id'])
+    
+    # Remove all players from dictionary
+    for sess_id in players_to_remove:
+        if sess_id in players:
+            del players[sess_id]
+    
+    # Clear admin_session_id
+    admin_session_id = None
+    
+    # Broadcast updated lobby (empty)
+    lobby_players = []
+    socketio.emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+    
+    print(f"[CONSOLE] Game restarted - cleared all {len(players_to_remove)} players (including admin)")
+    return True
+
+# Flask routes for HTTP-based console commands (backup method)
+@app.route('/admin/console/skip-selection', methods=['POST'])
+def console_skip_selection():
+    """HTTP endpoint for skipping selection screen"""
+    result = skip_selection()
+    return {'success': result, 'status': game_state['status']}, 200 if result else 400
+
+@app.route('/admin/console/skip-voting', methods=['POST'])
+def console_skip_voting():
+    """HTTP endpoint for skipping voting screen"""
+    result = skip_voting_console()
+    return {'success': result, 'status': game_state['status']}, 200 if result else 400
+
+@app.route('/admin/console/next-round', methods=['POST'])
+def console_next_round():
+    """HTTP endpoint for advancing to next round"""
+    result = next_round_console()
+    return {'success': result, 'status': game_state['status'], 'round': game_state['current_round']}, 200 if result else 400
+
+@app.route('/admin/console/restart-game', methods=['POST'])
+def console_restart_game():
+    """HTTP endpoint for restarting game"""
+    result = restart_game_console()
+    return {'success': result, 'status': game_state['status']}, 200 if result else 400
 
 if __name__ == '__main__':
     # Get port from environment variable (for Railway/deployment) or default to 8000

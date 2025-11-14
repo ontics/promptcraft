@@ -230,6 +230,12 @@ document.getElementById('start-game-btn').addEventListener('click', () => {
     socket.emit('start_game');
 });
 
+document.getElementById('restart-game-btn').addEventListener('click', () => {
+    if (confirm('Are you sure you want to restart the game? This will reset all players and create a new game session.')) {
+        socket.emit('restart_game');
+    }
+});
+
 // Game screen handlers
 document.getElementById('generate-btn').addEventListener('click', () => {
     const promptInput = document.getElementById('prompt-input');
@@ -264,6 +270,53 @@ document.getElementById('confirm-selection-btn').addEventListener('click', () =>
             confirmBtn.disabled = true;
         }
     }
+});
+
+// Handle image selection response from server
+socket.on('image_selected', (data) => {
+    if (!data.success) {
+        // Server rejected the selection (error image or missing prompt_id)
+        console.error('[CLIENT] Image selection rejected:', data.error);
+        gameState.hasConfirmedSelection = false; // Reset confirmation state
+        
+        // Reset button appearance
+        const confirmBtn = document.getElementById('confirm-selection-btn');
+        if (confirmBtn) {
+            confirmBtn.style.background = ''; // Reset to default
+            confirmBtn.textContent = 'Confirm Selection';
+            confirmBtn.disabled = false;
+        }
+        
+        // Show error message to user
+        alert(data.error || 'Cannot select this image. Please choose a different one.');
+        
+        // Find and select the last valid image instead
+        if (gameState.generatedImages.length > 0) {
+            let lastValidIndex = -1;
+            for (let i = gameState.generatedImages.length - 1; i >= 0; i--) {
+                if (!gameState.generatedImages[i].error_type && gameState.generatedImages[i].prompt_id) {
+                    lastValidIndex = i;
+                    break;
+                }
+            }
+            
+            if (lastValidIndex >= 0) {
+                gameState.selectedImageIndex = lastValidIndex;
+                // Update visual selection
+                const gallery = document.getElementById('selection-gallery');
+                if (gallery) {
+                    const items = gallery.querySelectorAll('.selection-item');
+                    items.forEach((item, idx) => {
+                        item.classList.remove('selected');
+                        if (idx === lastValidIndex) {
+                            item.classList.add('selected');
+                        }
+                    });
+                }
+            }
+        }
+    }
+    // If success is true, the button state is already updated above
 });
 
 // Next round
@@ -358,6 +411,12 @@ socket.on('admin_joined', (data) => {
 socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
     
+    // Ensure admin screen is visible
+    const adminScreen = document.getElementById('admin-screen');
+    if (adminScreen) {
+        adminScreen.style.display = 'block';
+    }
+    
     // Show admin game controls
     const adminGameControls = document.getElementById('admin-game-controls');
     if (adminGameControls) {
@@ -387,6 +446,12 @@ socket.on('admin_game_started', (data) => {
 
 socket.on('admin_voting_started', (data) => {
     console.log('admin_voting_started event received:', data);
+    
+    // Ensure admin screen is visible
+    const adminScreen = document.getElementById('admin-screen');
+    if (adminScreen) {
+        adminScreen.style.display = 'block';
+    }
     
     // Update admin status
     document.getElementById('admin-status').textContent = 'Voting (Selection)';
@@ -1429,32 +1494,19 @@ socket.on('game_over', (data) => {
     const finalResults = document.getElementById('final-results');
     finalResults.innerHTML = '<h2>Final Standings</h2>';
 
-    // Calculate ranks with ties - players with same score get same rank
-    let currentRank = 1;
-    let previousScore = null;
-    
     data.results.forEach((result, index) => {
-        // If this player's score is different from previous (and lower), update rank
-        if (previousScore !== null && result.total_score < previousScore) {
-            currentRank = index + 1; // Rank is position in list (1-indexed)
-        }
-        // If this is the first player, rank is 1
-        // If score is same as previous, keep same rank (tie)
-        previousScore = result.total_score;
-        
         const item = document.createElement('div');
         item.className = 'final-result-item';
 
-        // Apply podium classes based on rank (not index)
-        if (currentRank === 1) item.classList.add('podium-1');
-        else if (currentRank === 2) item.classList.add('podium-2');
-        else if (currentRank === 3) item.classList.add('podium-3');
+        if (index === 0) item.classList.add('podium-1');
+        else if (index === 1) item.classList.add('podium-2');
+        else if (index === 2) item.classList.add('podium-3');
 
         let rankEmoji = '';
-        if (currentRank === 1) rankEmoji = '🥇';
-        else if (currentRank === 2) rankEmoji = '🥈';
-        else if (currentRank === 3) rankEmoji = '🥉';
-        else rankEmoji = `#${currentRank}`;
+        if (index === 0) rankEmoji = '🥇';
+        else if (index === 1) rankEmoji = '🥈';
+        else if (index === 2) rankEmoji = '🥉';
+        else rankEmoji = `#${index + 1}`;
 
         item.innerHTML = `
             <div class="result-rank">${rankEmoji}</div>
@@ -1471,14 +1523,60 @@ socket.on('game_over', (data) => {
     });
 });
 
-socket.on('game_restarted', () => {
-    showScreen('lobby');
+socket.on('game_restarted', (data) => {
+    // Admin stays in the game, just reset their view
+    if (gameState.isAdmin) {
+        showScreen('lobby');
+        // Reset state
+        gameState.currentRound = 0;
+        gameState.selectedImageIndex = null;
+        gameState.generatedImages = [];
+        gameState.votedFor = null;
+        
+        // Show message if provided
+        if (data && data.message) {
+            alert(data.message);
+        }
+    }
+});
 
-    // Reset state
+socket.on('game_restarted_kick', (data) => {
+    // Non-admin players have been kicked - they need to rejoin
+    showScreen('lobby');
+    
+    // Clear all game state
     gameState.currentRound = 0;
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
+    gameState.playerName = null;
+    gameState.playerTeam = null;
+    gameState.playerCharacter = null;
+    gameState.isAdmin = false;
+    gameState.hasConfirmedSelection = false;
+    
+    // Clear player name input so they need to re-enter
+    const nameInput = document.getElementById('player-name');
+    if (nameInput) {
+        nameInput.value = '';
+        nameInput.disabled = false;
+    }
+    
+    // Clear player list
+    const playerList = document.getElementById('player-list');
+    if (playerList) {
+        playerList.innerHTML = '';
+    }
+    
+    // Show message
+    const message = data && data.message ? data.message : 'The game has been restarted. Please rejoin to continue.';
+    alert(message);
+    
+    // Reset avatar state
+    stopCharacterTalking();
+    gameState.currentCharacter = null;
+    gameState.avatarPlantState = null;
+    gameState.avatarAnimationState = null;
 });
 
 socket.on('error', (data) => {

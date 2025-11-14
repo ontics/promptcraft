@@ -409,6 +409,28 @@ def get_player_name(player_id: str) -> Optional[str]:
         print(f"❌ Error getting player_name: {e}")
     return None
 
+def get_player_by_name_and_game(player_name: str, game_id: int) -> Optional[Dict]:
+    """
+    Look up a player by name and game_id to restore their data after reconnection.
+    Uses case-insensitive matching for player_name.
+    Returns player data (player_id, team, character) if found, None otherwise.
+    """
+    if not is_configured() or not game_id or not player_name:
+        return None
+    
+    try:
+        # Get all players for this game and match case-insensitively
+        result = supabase.table('players').select('player_id, player_name, team, character').eq('game_id', game_id).execute()
+        if result.data:
+            # Case-insensitive match
+            player_name_lower = player_name.lower().strip()
+            for player in result.data:
+                if player.get('player_name', '').lower().strip() == player_name_lower:
+                    return player
+    except Exception as e:
+        print(f"❌ Error looking up player by name: {e}")
+    return None
+
 def sanitize_folder_name(name: str) -> str:
     """
     Sanitize a name for use in folder paths.

@@ -24,6 +24,8 @@ Thumbs.db
 
 # Logs
 *.log
+logs.*.json
+playtest_log_analysis.md
 
 # Generated images (experiment data)
 static/generated/
@@ -31,3 +33,4 @@ static/generated/
 # Development documentation and SQL files (keep local, exclude from GitHub)
 features/
 test_db_connection.py
+*.sql

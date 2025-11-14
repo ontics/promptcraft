@@ -30,6 +30,7 @@
                                 <div id="admin-controls" style="display: none;">
                                     <button id="assign-teams-btn" class="btn btn-primary">Assign Teams</button>
                                     <button id="start-game-btn" class="btn btn-success">Start Game</button>
+                                    <button id="restart-game-btn" class="btn btn-danger" style="margin-top: 10px;">🔄 Restart Game</button>
                                 </div>
                             </div>
                         </div>
@@ -63,26 +64,26 @@
                         </div>
                     </div>
                     
-                    <!-- Admin Gamemaster Screen (hidden initially) -->
-                    <div id="admin-screen" class="admin-wrapper card" style="display: none; margin-top: 20px;">
-                        <h2>🎮 Gamemaster Dashboard</h2>
-                        <div id="admin-player-list" class="admin-player-list"></div>
-                        <div id="admin-game-controls" style="display: none;">
-                            <div class="admin-controls-group">
-                                <h3>Round Controls</h3>
-                                <button id="admin-end-round-btn" class="btn btn-danger">End Round Early</button>
-                                <button id="admin-skip-voting-btn" class="btn btn-warning">Skip Voting / Advance</button>
-                                <button id="admin-next-round-btn" class="btn btn-success">Next Round</button>
-                            </div>
-                            <div class="admin-status">
-                                <p>Round: <span id="admin-round">-</span></p>
-                                <p>Status: <span id="admin-status">-</span></p>
-                                <p>Time Remaining: <span id="admin-time-remaining">-</span></p>
-                                <p>Target: <span id="admin-target">-</span></p>
-                            </div>
-                        </div>
-                    </div>
-
+                </div>
+            </div>
+        </div>
+        
+        <!-- Admin Gamemaster Screen (always available, shown when admin) -->
+        <div id="admin-screen" class="admin-wrapper card" style="display: none; position: fixed; top: 20px; right: 20px; width: 350px; max-height: 90vh; overflow-y: auto; z-index: 1000; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
+            <h2>🎮 Gamemaster Dashboard</h2>
+            <div id="admin-player-list" class="admin-player-list"></div>
+            <div id="admin-game-controls" style="display: none;">
+                <div class="admin-controls-group">
+                    <h3>Round Controls</h3>
+                    <button id="admin-end-round-btn" class="btn btn-danger">End Round Early</button>
+                    <button id="admin-skip-voting-btn" class="btn btn-warning">Skip Voting / Advance</button>
+                    <button id="admin-next-round-btn" class="btn btn-success">Next Round</button>
+                </div>
+                <div class="admin-status">
+                    <p>Round: <span id="admin-round">-</span></p>
+                    <p>Status: <span id="admin-status">-</span></p>
+                    <p>Time Remaining: <span id="admin-time-remaining">-</span></p>
+                    <p>Target: <span id="admin-target">-</span></p>
                 </div>
             </div>
         </div>
