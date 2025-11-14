@@ -802,28 +802,30 @@ def handle_start_game():
                 p['has_successful_prompt'][1] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round 1")
 
-        # Send game started to players only (not admin)
+        # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
         for p in players.values():
             if not p['is_admin']:
-                # Determine character for this round
-                character = get_character_for_round(p, 1)
-                character_data = {
-                    'character': character,
-                    'round': 1
-                }
-                if character == 'Bud':
-                    character_data['animation_state'] = get_bud_animation_state()
-                elif character == 'Spud':
-                    character_data['plant_state'] = 'base'
-                    character_data['animation_state'] = 'smiling'
-                    character_data['prompt_count'] = 0
+                socket_id = p.get('socket_id')
+                if socket_id:  # Only send if player is connected
+                    # Determine character for this round
+                    character = get_character_for_round(p, 1)
+                    character_data = {
+                        'character': character,
+                        'round': 1
+                    }
+                    if character == 'Bud':
+                        character_data['animation_state'] = get_bud_animation_state()
+                    elif character == 'Spud':
+                        character_data['plant_state'] = 'base'
+                        character_data['animation_state'] = 'smiling'
+                        character_data['prompt_count'] = 0
 
-        emit('game_started', {
-            'round': 1,
-            'target': game_state['current_target'],
-                    'end_time': game_state['round_end_time'],
-                    'character': character_data
-                }, room=p['socket_id'])
+                    emit('game_started', {
+                        'round': 1,
+                        'target': game_state['current_target'],
+                        'end_time': game_state['round_end_time'],
+                        'character': character_data
+                    }, room=socket_id)
         
         # Send admin game started event with player status
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
