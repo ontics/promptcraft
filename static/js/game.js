@@ -260,7 +260,12 @@ document.getElementById('confirm-selection-btn').addEventListener('click', () =>
     if (gameState.selectedImageIndex !== null) {
         // Mark as confirmed before notifying server
         gameState.hasConfirmedSelection = true;
-        socket.emit('select_image', { image_index: gameState.selectedImageIndex });
+        // Send prompt_id instead of image_index to avoid index mismatch (client filters errors, server doesn't)
+        const selectedImage = gameState.generatedImages[gameState.selectedImageIndex];
+        socket.emit('select_image', { 
+            prompt_id: selectedImage.prompt_id,
+            image_index: gameState.selectedImageIndex  // Keep for backward compatibility/validation
+        });
         
         // Change button appearance to show it's been confirmed
         const confirmBtn = document.getElementById('confirm-selection-btn');
@@ -581,14 +586,74 @@ function updateAdminPlayerList(players) {
         
         // Create left side with player info
         const leftDiv = document.createElement('div');
-        leftDiv.innerHTML = `
-            <strong>${player.name}</strong> (${player.team ? player.team : '?'})
-            <br>
+        leftDiv.style.cssText = 'flex: 1;';
+        
+        // Player name and team dropdown (only in lobby)
+        const nameRow = document.createElement('div');
+        nameRow.style.cssText = 'display: flex; align-items: center; gap: 10px; margin-bottom: 5px;';
+        
+        const nameStrong = document.createElement('strong');
+        nameStrong.textContent = player.name;
+        nameRow.appendChild(nameStrong);
+        
+        // Team dropdown (only in lobby, only for non-admin players)
+        if (isInLobby && !player.is_admin) {
+            const teamSelect = document.createElement('select');
+            teamSelect.className = 'team-select';
+            teamSelect.style.cssText = 'padding: 2px 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;';
+            teamSelect.value = player.team || '';
+            
+            const optionNone = document.createElement('option');
+            optionNone.value = '';
+            optionNone.textContent = 'No Team';
+            teamSelect.appendChild(optionNone);
+            
+            const optionGreen = document.createElement('option');
+            optionGreen.value = 'Green';
+            optionGreen.textContent = 'Green';
+            teamSelect.appendChild(optionGreen);
+            
+            const optionOrange = document.createElement('option');
+            optionOrange.value = 'Orange';
+            optionOrange.textContent = 'Orange';
+            teamSelect.appendChild(optionOrange);
+            
+            // Handle team change
+            teamSelect.addEventListener('change', (e) => {
+                const newTeam = e.target.value;
+                if (newTeam && newTeam !== player.team) {
+                    if (confirm(`Change ${player.name}'s team to ${newTeam}?`)) {
+                        socket.emit('set_player_team', {
+                            session_id: player.session_id,
+                            team: newTeam
+                        });
+                    } else {
+                        // Revert dropdown
+                        teamSelect.value = player.team || '';
+                    }
+                }
+            });
+            
+            nameRow.appendChild(teamSelect);
+        } else {
+            // Show team as text (not in lobby or during game)
+            const teamSpan = document.createElement('span');
+            teamSpan.textContent = `(${player.team ? player.team : '?'})`;
+            teamSpan.style.cssText = 'color: #666; font-size: 12px;';
+            nameRow.appendChild(teamSpan);
+        }
+        
+        leftDiv.appendChild(nameRow);
+        
+        // Status and info
+        const infoDiv = document.createElement('div');
+        infoDiv.innerHTML = `
             <small style="color: ${statusColor}">${statusText}</small>
             <br><small class="prompts-count">Prompts: ${promptsSubmitted}</small>
             ${selectionStatus ? `<br><small>${selectionStatus}</small>` : ''}
             ${voteStatus ? `<br><small>${voteStatus}</small>` : ''}
         `;
+        leftDiv.appendChild(infoDiv);
         
         // Create right side with score and remove button
         const rightDiv = document.createElement('div');
@@ -1306,8 +1371,12 @@ function startSelectionTimer(duration, startTime) {
                     }
                 }
                 
-                // Notify server of auto-selection
-                socket.emit('select_image', { image_index: effectiveIndex });
+                // Notify server of auto-selection (send prompt_id to avoid index mismatch)
+                const autoSelectedImage = gameState.generatedImages[effectiveIndex];
+                socket.emit('select_image', { 
+                    prompt_id: autoSelectedImage.prompt_id,
+                    image_index: effectiveIndex  // Keep for backward compatibility
+                });
                 console.log('[CLIENT] Timer expired - auto-selected last valid image');
             }
             

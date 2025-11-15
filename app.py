@@ -85,7 +85,8 @@ SPUDDY_MESSAGES = [
     "Did you know 20,000 trees have been burned to clear land for new data center construction?",
     "You would need 12 earths to sustain your current levels of natural resource consumption!",
     "Your carbon footprint is among the highest 1% of individuals. Is it lonely at the top?",
-    "OK, fifteen images? That's the same emissions as flying three times around the world."
+    "OK, fifteen images? That's the same emissions as flying three times around the world.",
+    "This is terrible for the environment. How are you still going?"
 ]
 
 # Spud error message
@@ -1686,44 +1687,64 @@ def handle_select_image(data):
         return
 
     player = players[session_id]
-    image_index = data.get('image_index')
+    prompt_id = data.get('prompt_id')
+    image_index = data.get('image_index')  # Keep for backward compatibility/validation
     current_round = game_state['current_round']
 
-    if image_index < len(player['images'][current_round]):
+    # Prefer prompt_id if available (more reliable than index due to error image filtering mismatch)
+    selected_image = None
+    if prompt_id:
+        # Find image by prompt_id (avoids index mismatch between client filtered array and server unfiltered array)
+        for img in player['images'][current_round]:
+            if img.get('prompt_id') == prompt_id:
+                selected_image = img
+                break
+        
+        if not selected_image:
+            print(f"❌ ERROR: Player {player.get('display_name', player['name'])} selected image with prompt_id {prompt_id} but it wasn't found in their images for round {current_round}")
+            emit('image_selected', {'success': False, 'error': 'Selected image not found. Please try selecting again.'})
+            return
+    elif image_index is not None and image_index < len(player['images'][current_round]):
+        # Fallback to index-based lookup (backward compatibility)
         selected_image = player['images'][current_round][image_index]
-        
-        # Server-side validation: Prevent selecting error images
-        if selected_image.get('error_type'):
-            print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select error image (error_type: {selected_image.get('error_type')}) in round {current_round}. Rejecting selection.")
-            emit('image_selected', {'success': False, 'error': 'Cannot select error image. Please choose a valid image.'})
-            return
-        
-        # Server-side validation: Prevent selecting images without prompt_id
-        prompt_id = selected_image.get('prompt_id')
-        if not prompt_id:
-            print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select image without prompt_id in round {current_round}. Rejecting selection.")
-            emit('image_selected', {'success': False, 'error': 'Cannot select image without valid prompt_id. Please choose a different image.'})
-            return
-        
-        player['selected_images'][current_round] = selected_image
-        player['has_confirmed_selection'][current_round] = True  # Mark as confirmed
-        
-        # Save image selection to database
-        if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-            db.save_image_selection(
-                player_id=session_id,
-                round_id=game_state['round_id'],
-                game_id=game_state['game_id'],
-                prompt_id=prompt_id
-            )
-            print(f"✅ Saved image selection for player {player.get('display_name', player['name'])} in round {current_round}, prompt_id={prompt_id}")
-        else:
-            print(f"⚠️ WARNING: Cannot save image selection - database not configured or missing game_id/round_id")
-        
-        emit('image_selected', {'success': True})
+        print(f"⚠️ WARNING: Using index-based selection (backward compatibility). Player {player.get('display_name', player['name'])} selected index {image_index}")
+    else:
+        print(f"❌ ERROR: Player {player.get('display_name', player['name'])} sent invalid selection (no prompt_id or invalid image_index)")
+        emit('image_selected', {'success': False, 'error': 'Invalid image selection. Please try selecting again.'})
+        return
+    
+    # Server-side validation: Prevent selecting error images
+    if selected_image.get('error_type'):
+        print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select error image (error_type: {selected_image.get('error_type')}) in round {current_round}. Rejecting selection.")
+        emit('image_selected', {'success': False, 'error': 'Cannot select error image. Please choose a valid image.'})
+        return
+    
+    # Server-side validation: Prevent selecting images without prompt_id
+    final_prompt_id = selected_image.get('prompt_id')
+    if not final_prompt_id:
+        print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select image without prompt_id in round {current_round}. Rejecting selection.")
+        emit('image_selected', {'success': False, 'error': 'Cannot select image without valid prompt_id. Please choose a different image.'})
+        return
+    
+    player['selected_images'][current_round] = selected_image
+    player['has_confirmed_selection'][current_round] = True  # Mark as confirmed
+    
+    # Save image selection to database
+    if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+        db.save_image_selection(
+            player_id=session_id,
+            round_id=game_state['round_id'],
+            game_id=game_state['game_id'],
+            prompt_id=final_prompt_id
+        )
+        print(f"✅ Saved image selection for player {player.get('display_name', player['name'])} in round {current_round}, prompt_id={final_prompt_id}")
+    else:
+        print(f"⚠️ WARNING: Cannot save image selection - database not configured or missing game_id/round_id")
+    
+    emit('image_selected', {'success': True})
 
-        # Check if all players have selected
-        check_all_selected()
+    # Check if all players have selected
+    check_all_selected()
 
 def check_all_selected():
     """Check if all players have selected their images, and advance to voting if so"""
@@ -1811,6 +1832,17 @@ def start_voting_on_images():
         # Log current state for debugging
         connected_players = [p for p in players.values() if not p.get('is_admin') and p.get('socket_id')]
         print(f"[VOTING] Starting voting phase: round={current_round}, connected_players={len(connected_players)}, total_players={len([p for p in players.values() if not p.get('is_admin')])}")
+        
+        # Clear base64 from current round's images when voting starts (except selected image, needed temporarily)
+        for p in players.values():
+            if not p['is_admin']:
+                if current_round in p['images']:
+                    selected_prompt_id = p['selected_images'].get(current_round, {}).get('prompt_id')
+                    for img in p['images'][current_round]:
+                        # Keep base64 only for selected image (needed for round results until URL is ready)
+                        if img.get('prompt_id') != selected_prompt_id and 'image_data' in img:
+                            del img['image_data']
+        print(f"[MEMORY] Cleared image_data from current round's non-selected images when voting started")
 
         # Gather all selected images with prompt_id (exclude admin)
         # Use image_url instead of base64 to reduce memory usage
@@ -1980,22 +2012,31 @@ def show_round_results():
     results.sort(key=lambda x: x['total_score'], reverse=True)
     
     # Clear old round data after round completes (memory optimization)
-    # Clear image_data from completed rounds, keep URLs and metadata
+    # Force clear image_data from completed rounds, even if image_url doesn't exist yet
     for p in players.values():
         if not p['is_admin']:
             for round_num in [1, 2, 3]:
                 if round_num < current_round:
-                    # Clear image_data from all images in completed rounds (keep URLs)
+                    # Force clear image_data from all images in completed rounds (even without URL)
                     if round_num in p['images']:
                         for img in p['images'][round_num]:
-                            if 'image_data' in img and img.get('image_url'):
-                                del img['image_data']
+                            if 'image_data' in img:
+                                del img['image_data']  # Force clear, even if URL not ready
                     # Also clear image_data from selected_images for completed rounds
                     if round_num in p['selected_images']:
                         selected = p['selected_images'][round_num]
-                        if 'image_data' in selected and selected.get('image_url'):
-                            del selected['image_data']
-    print(f"[MEMORY] Cleared image_data from completed rounds (rounds < {current_round})")
+                        if 'image_data' in selected:
+                            del selected['image_data']  # Force clear
+    print(f"[MEMORY] Force cleared image_data from completed rounds (rounds < {current_round})")
+    
+    # Clear base64 from current round's selected image after results are shown
+    for p in players.values():
+        if not p['is_admin']:
+            if current_round in p['selected_images']:
+                selected = p['selected_images'][current_round]
+                if 'image_data' in selected:
+                    del selected['image_data']  # Force clear, URL should be available by now
+    print(f"[MEMORY] Cleared image_data from current round's selected images")
 
     # Send to players only (not admin) - must check socket_id, None defaults to current request context
     for p in players.values():
@@ -2061,17 +2102,17 @@ def handle_next_round():
                 # Clear old round data (memory optimization)
                 for prev_round in [1, 2, 3]:
                     if prev_round < round_num:
-                        # Clear image_data from all images in completed rounds (keep URLs)
+                        # Force clear image_data from all images in completed rounds (even without URL)
                         if prev_round in p['images']:
                             for img in p['images'][prev_round]:
-                                if 'image_data' in img and img.get('image_url'):
-                                    del img['image_data']
+                                if 'image_data' in img:
+                                    del img['image_data']  # Force clear, even if URL not ready
                         # Also clear image_data from selected_images for completed rounds
                         if prev_round in p['selected_images']:
                             selected = p['selected_images'][prev_round]
-                            if 'image_data' in selected and selected.get('image_url'):
-                                del selected['image_data']
-        print(f"[MEMORY] Cleared image_data from completed rounds (rounds < {round_num})")
+                            if 'image_data' in selected:
+                                del selected['image_data']  # Force clear
+        print(f"[MEMORY] Force cleared image_data from completed rounds (rounds < {round_num})")
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
         for p in players.values():
