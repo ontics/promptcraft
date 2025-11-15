@@ -693,9 +693,9 @@ function updatePlayerList(players) {
             if (player.team) {
                 badgeText = player.team; // Just show "Green" or "Orange"
                 badgeClass = `team-${player.team}`; // Apply CSS class for color
-            } else {
-                badgeText = 'Waiting';
-                badgeStyle = 'background: #e0e0e0;';
+        } else {
+            badgeText = 'Waiting';
+            badgeStyle = 'background: #e0e0e0;';
             }
         }
         
@@ -748,7 +748,7 @@ socket.on('game_started', (data) => {
         updateAvatarState(data.character);
     } else {
         // Fallback: use old setupCharacterAvatar if no character data
-        setupCharacterAvatar();
+    setupCharacterAvatar();
     }
 
     showScreen('game');
@@ -959,18 +959,18 @@ socket.on('character_message', (data) => {
 
     // Update message bubble (messages stay until replaced or 20 seconds pass)
     if (data.message) {
-        messageText.textContent = data.message;
-        messageBubble.style.display = 'block';
+    messageText.textContent = data.message;
+    messageBubble.style.display = 'block';
 
         // Style based on character
         if (data.character === 'Spud') {
-            messageBubble.style.background = '#ffe8e8';
-            messageBubble.style.borderLeft = '4px solid #ff6b6b';
+        messageBubble.style.background = '#ffe8e8';
+        messageBubble.style.borderLeft = '4px solid #ff6b6b';
             // Update bubble arrow color
             messageBubble.style.setProperty('--bubble-color', '#ffe8e8');
-        } else {
-            messageBubble.style.background = '#fff3bf';
-            messageBubble.style.borderLeft = '4px solid #fab005';
+    } else {
+        messageBubble.style.background = '#fff3bf';
+        messageBubble.style.borderLeft = '4px solid #fab005';
             messageBubble.style.setProperty('--bubble-color', '#fff3bf');
         }
         
@@ -1071,7 +1071,7 @@ socket.on('image_generated', (data) => {
     
     // Scroll to bottom
     if (conversationArea) {
-        conversationArea.scrollTop = conversationArea.scrollHeight;
+    conversationArea.scrollTop = conversationArea.scrollHeight;
     }
     
     // If we're in selection screen, add this image to the gallery
@@ -1084,10 +1084,10 @@ socket.on('image_generated', (data) => {
         // If the player hasn't confirmed a selection yet, shift default to the newest valid image
         if (!gameState.hasConfirmedSelection) {
             gameState.selectedImageIndex = validImageIndex;
-            
+
             // Visual feedback - move the green border to the newest image in the gallery
             // The gallery only contains valid images, so we need to find the last item
-            const gallery = document.getElementById('selection-gallery');
+    const gallery = document.getElementById('selection-gallery');
             if (gallery) {
                 const items = gallery.querySelectorAll('.selection-item');
                 if (items.length > 0) {
@@ -1114,18 +1114,18 @@ function addImageToSelectionGallery(imgData, index) {
     const existingItems = gallery.querySelectorAll('.selection-item');
     if (existingItems.length > index) return; // Already added
     
-    const item = document.createElement('div');
-    item.className = 'selection-item';
-    item.innerHTML = `
-        <img src="${imgData.image_data}" alt="Generated image">
-    `;
+        const item = document.createElement('div');
+        item.className = 'selection-item';
+        item.innerHTML = `
+            <img src="${imgData.image_data}" alt="Generated image">
+        `;
 
-    item.addEventListener('click', () => {
-        // Deselect all
-        document.querySelectorAll('.selection-item').forEach(i => i.classList.remove('selected'));
-        // Select this
-        item.classList.add('selected');
-        gameState.selectedImageIndex = index;
+        item.addEventListener('click', () => {
+            // Deselect all
+            document.querySelectorAll('.selection-item').forEach(i => i.classList.remove('selected'));
+            // Select this
+            item.classList.add('selected');
+            gameState.selectedImageIndex = index;
         const confirmBtn = document.getElementById('confirm-selection-btn');
         if (confirmBtn) {
             confirmBtn.disabled = false;
@@ -1135,9 +1135,9 @@ function addImageToSelectionGallery(imgData, index) {
         if (defaultNotice) {
             defaultNotice.style.display = 'none';
         }
-    });
+        });
 
-    gallery.appendChild(item);
+        gallery.appendChild(item);
 }
 
 socket.on('voting_started', (data) => {
@@ -1336,8 +1336,8 @@ socket.on('vote_on_images', (data) => {
     // Reset confirm vote button
     const confirmVoteBtn = document.getElementById('confirm-vote-btn');
     if (confirmVoteBtn) {
-        confirmVoteBtn.disabled = true;
-        confirmVoteBtn.textContent = 'Confirm Vote';
+    confirmVoteBtn.disabled = true;
+    confirmVoteBtn.textContent = 'Confirm Vote';
     }
 
     // Display target image on the right (no description)
@@ -1375,8 +1375,10 @@ socket.on('vote_on_images', (data) => {
         }
         
         // Display only image (no player name, no prompt text) - anonymized voting
+        // Support both URL and base64 (URL preferred for memory efficiency)
+        const imageSrc = item.image.image_url || item.image.image_data || '';
         votingItem.innerHTML = `
-            <img src="${item.image.image_data}" alt="Submission image">
+            <img src="${imageSrc}" alt="Submission image">
         `;
 
         votingItem.addEventListener('click', () => {
@@ -1389,7 +1391,7 @@ socket.on('vote_on_images', (data) => {
 
             gameState.tempVoteSelection = item.session_id;
             if (confirmVoteBtn) {
-                confirmVoteBtn.disabled = false;
+            confirmVoteBtn.disabled = false;
             }
         });
 
@@ -1398,16 +1400,16 @@ socket.on('vote_on_images', (data) => {
     
     // Add confirm vote button handler (using existing confirmVoteBtn variable)
     if (confirmVoteBtn) {
-        confirmVoteBtn.onclick = function() {
-            if (gameState.tempVoteSelection) {
+    confirmVoteBtn.onclick = function() {
+        if (gameState.tempVoteSelection) {
                 const promptId = promptIdMap[gameState.tempVoteSelection];
                 socket.emit('cast_vote', { 
                     voted_for: gameState.tempVoteSelection,
                     prompt_id: promptId  // Include prompt_id for database tracking
                 });
-                confirmVoteBtn.disabled = true;
-                confirmVoteBtn.textContent = 'Vote Submitted';
-                gameState.votedFor = gameState.tempVoteSelection;
+            confirmVoteBtn.disabled = true;
+            confirmVoteBtn.textContent = 'Vote Submitted';
+            gameState.votedFor = gameState.tempVoteSelection;
                 
                 // Mark the selected item as voted (visual feedback)
                 const selectedItem = document.querySelector('.voting-item.selected');
@@ -1415,8 +1417,8 @@ socket.on('vote_on_images', (data) => {
                     selectedItem.classList.remove('selected');
                     selectedItem.classList.add('voted');
                 }
-            }
-        };
+        }
+    };
     }
 });
 
@@ -1480,7 +1482,7 @@ socket.on('round_results', (data) => {
     const nextRoundBtn = document.getElementById('next-round-btn');
     if (nextRoundBtn) {
         nextRoundBtn.style.display = 'none';
-    }
+        }
 });
 
 socket.on('game_over', (data) => {
@@ -1526,12 +1528,12 @@ socket.on('game_over', (data) => {
 socket.on('game_restarted', (data) => {
     // Admin stays in the game, just reset their view
     if (gameState.isAdmin) {
-        showScreen('lobby');
-        // Reset state
-        gameState.currentRound = 0;
-        gameState.selectedImageIndex = null;
-        gameState.generatedImages = [];
-        gameState.votedFor = null;
+    showScreen('lobby');
+    // Reset state
+    gameState.currentRound = 0;
+    gameState.selectedImageIndex = null;
+    gameState.generatedImages = [];
+    gameState.votedFor = null;
         
         // Show message if provided
         if (data && data.message) {
@@ -1634,15 +1636,15 @@ function startRoundTimer(endTime) {
         const remaining = Math.max(0, endTime - now);
 
         if (timerEl) {
-            const minutes = Math.floor(remaining / 60);
-            const seconds = Math.floor(remaining % 60);
-            timerEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        const minutes = Math.floor(remaining / 60);
+        const seconds = Math.floor(remaining % 60);
+        timerEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
-            // Only show warning if under 30 seconds
-            if (remaining > 0 && remaining <= 30) {
-                timerEl.classList.add('warning');
-            } else {
-                timerEl.classList.remove('warning');
+        // Only show warning if under 30 seconds
+        if (remaining > 0 && remaining <= 30) {
+            timerEl.classList.add('warning');
+        } else {
+            timerEl.classList.remove('warning');
             }
         }
 

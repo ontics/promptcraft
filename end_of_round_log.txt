@@ -1,0 +1,197 @@
+[DEBUG] Player: James N, Session: ff535434..., Round: 2, Has current_image: True
+[API RESPONSE] Response type: <class 'google.genai.types.GenerateContentResponse'>
+[API RESPONSE] finish_reason: FinishReason.STOP
+[IMAGE SIZE] File size: 2467.77 KB
+[DEBUG] Stored new image for player Victor (session: 0dd27589...), round 2, successful prompt
+[API REQUEST] Refining image - Prompt sent to API: 'birds eye view of christmas tree mascot in red and green tattered cloths, with exaggerated cartoon eyes and mouth, funny big round eyes, and funny big mouth with human teeth and red lips, wearing a white round hat, on a sunny day, running on a football field. SILLY AND NOT SCARY mouth and eyes like fake detective googles' (NO target context)
+100.64.0.3 - - [14/Nov/2025 01:31:28] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:28] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:29] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+✅ Saved prompt: prompt_id=450, player=0dd27589cf1d9b12fb01cfbd9b987ff5, index=5, error_type=None
+100.64.0.7 - - [14/Nov/2025 01:31:29] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:29] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:29] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+[API RESPONSE] Response type: <class 'google.genai.types.GenerateContentResponse'>
+[API RESPONSE] finish_reason: FinishReason.STOP
+[IMAGE SIZE] File size: 2197.57 KB
+[DEBUG] Stored new image for player Camille (session: 30ebdb7d...), round 2, successful prompt
+✅ Saved prompt: prompt_id=451, player=30ebdb7d68f6f620635e7bb382a16be4, index=5, error_type=None
+100.64.0.7 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Uploaded image to Storage: game_31/Victor_0dd27589/round_2/prompt_5.png
+100.64.0.7 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Updated prompt image URL: prompt_id=450
+100.64.0.4 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+[TRANSITION] Starting transition to selection screen
+[TRANSITION] Background task started - will force progression after 10 seconds max
+[TRANSITION] Transition started - will progress automatically via background task or polling
+100.64.0.3 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:30] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Uploaded image to Storage: game_31/Camille_30ebdb7d/round_2/prompt_5.png
+100.64.0.3 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+✅ Updated prompt image URL: prompt_id=451
+100.64.0.3 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:31] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:32] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:32] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:32] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:32] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:32] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+[API RESPONSE] Response type: <class 'google.genai.types.GenerateContentResponse'>
+[API RESPONSE] finish_reason: FinishReason.STOP
+[IMAGE SIZE] File size: 2147.03 KB
+[DEBUG] Stored new image for player Zealand (session: d519b8f5...), round 2, successful prompt
+✅ Saved prompt: prompt_id=452, player=d519b8f5d22fb4f07a307e1b863c8734, index=9, error_type=None
+100.64.0.7 - - [14/Nov/2025 01:31:32] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Uploaded image to Storage: game_31/Zealand_d519b8f5/round_2/prompt_9.png
+100.64.0.7 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+✅ Updated prompt image URL: prompt_id=452
+100.64.0.3 - - [14/Nov/2025 01:31:33] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:34] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:34] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:34] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:34] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:34] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:34] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:35] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:35] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:35] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:35] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+[TRANSITION] Round timer check: 5.0s elapsed (min: 5s), advancing to selection
+[VOTING] Starting voting/selection phase (current status: transitioning)
+[VOTING] Tracked 8 active players at voting start: ['cf8543be15a2f759cc45c41eba6e0bd0', 'ff535434d46d84ae9b83b332080c09ab', '0dd27589cf1d9b12fb01cfbd9b987ff5', '4997b50b7a9f8ea7801540c786433cdf', '8e1864ef920f51a54d7ea607094eb146', '0e6d5a593a1368f79b8d7281b82d083c', '30ebdb7d68f6f620635e7bb382a16be4', 'd519b8f5d22fb4f07a307e1b863c8734']
+[VOTING] Status set to 'voting', will emit voting_started to players
+[VOTING] Emitting voting_started to player Jameslmaolegendcool (socket: -8NqWrOPp51u95XMAAAX)
+[VOTING] Emitting voting_started to player Brian (socket: ZOsB6CXTiGV3lXoeAAAd)
+[VOTING] Emitting voting_started to player Adrienn (socket: d1Ch9ouGi_Wop5K9AAAh)
+[VOTING] Emitting voting_started to player Camille (socket: UU2o3f37E7HOC9r6AAAj)
+✅ Ended round: round_id=60
+[VOTING] Emitting voting_started to player Zealand (socket: k2ql8lct19ojyoo-AAAl)
+[VOTING] Emitting voting_started to player Pamela (socket: lDo_Ac6mqLQ_56DsAAAb)
+[VOTING] Emitted voting_started to 8 connected players with synchronized start time
+Voting phase started for round 2
+[VOTING] Emitting voting_started to player James N (socket: f_ipU2qqqEBhQtzPAAAZ)
+[VOTING] Emitting voting_started to player Victor (socket: 5rbJ-jKSM8pwKM4MAAAf)
+100.64.0.3 - - [14/Nov/2025 01:31:35] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:35] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:36] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:36] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:36] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+[API RESPONSE] Response type: <class 'google.genai.types.GenerateContentResponse'>
+[API RESPONSE] finish_reason: FinishReason.STOP
+[IMAGE SIZE] File size: 2213.81 KB
+[DEBUG] Stored new image for player Pamela (session: cf8543be...), round 2, successful prompt
+100.64.0.3 - - [14/Nov/2025 01:31:36] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+✅ Saved prompt: prompt_id=453, player=cf8543be15a2f759cc45c41eba6e0bd0, index=5, error_type=None
+100.64.0.3 - - [14/Nov/2025 01:31:36] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/spud/dry/spud_dry_sad.svg HTTP/1.1" 304 -
+✅ Uploaded image to Storage: game_31/Pamela_cf8543be/round_2/prompt_5.png
+100.64.0.3 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Updated prompt image URL: prompt_id=453
+100.64.0.4 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:37] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:38] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:38] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:38] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:38] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:38] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:38] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:39] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=4997b50b7a9f8ea7801540c786433cdf, prompt_id=448
+✅ Saved image selection for player Jameslmaolegendcool in round 2, prompt_id=448
+100.64.0.3 - - [14/Nov/2025 01:31:39] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:39] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:39] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:39] "GET /static/images/avatars/spud/dry/spud_dry_sad_talking.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=ff535434d46d84ae9b83b332080c09ab, prompt_id=443
+✅ Saved image selection for player James N in round 2, prompt_id=443
+100.64.0.3 - - [14/Nov/2025 01:31:39] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:40] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:40] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+[API RESPONSE] Response type: <class 'google.genai.types.GenerateContentResponse'>
+[API RESPONSE] finish_reason: FinishReason.STOP
+[IMAGE SIZE] File size: 2471.98 KB
+[DEBUG] Stored new image for player James N (session: ff535434...), round 2, successful prompt
+100.64.0.4 - - [14/Nov/2025 01:31:40] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Saved prompt: prompt_id=454, player=ff535434d46d84ae9b83b332080c09ab, index=5, error_type=None
+100.64.0.3 - - [14/Nov/2025 01:31:40] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:40] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=cf8543be15a2f759cc45c41eba6e0bd0, prompt_id=444
+✅ Saved image selection for player Pamela in round 2, prompt_id=444
+[TRANSITION] Status already changed to voting, skipping
+100.64.0.4 - - [14/Nov/2025 01:31:40] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:41] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:41] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:41] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:41] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:41] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:41] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=8e1864ef920f51a54d7ea607094eb146, prompt_id=445
+✅ Saved image selection for player Brian in round 2, prompt_id=445
+✅ Uploaded image to Storage: game_31/James_N_ff535434/round_2/prompt_5.png
+✅ Updated prompt image URL: prompt_id=454
+✅ Saved image selection: player=0e6d5a593a1368f79b8d7281b82d083c, prompt_id=419
+✅ Saved image selection for player Adrienn in round 2, prompt_id=419
+100.64.0.3 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=30ebdb7d68f6f620635e7bb382a16be4, prompt_id=451
+✅ Saved image selection for player Camille in round 2, prompt_id=451
+100.64.0.3 - - [14/Nov/2025 01:31:42] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:43] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:44] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:44] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:44] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:44] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=0dd27589cf1d9b12fb01cfbd9b987ff5, prompt_id=424
+✅ Saved image selection for player Victor in round 2, prompt_id=424
+100.64.0.7 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:45] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:46] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:46] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:46] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:46] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.3 - - [14/Nov/2025 01:31:46] "GET /static/images/avatars/bud/bud_talking.svg HTTP/1.1" 304 -
+100.64.0.7 - - [14/Nov/2025 01:31:46] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+100.64.0.4 - - [14/Nov/2025 01:31:47] "GET /static/images/avatars/bud/bud_smiling.svg HTTP/1.1" 304 -
+✅ Saved image selection: player=d519b8f5d22fb4f07a307e1b863c8734, prompt_id=430
+✅ Saved image selection for player Zealand in round 2, prompt_id=430
+[SELECTION] All players have selected or time elapsed, advancing to voting screen
+Starting PromptCraft server on http://0.0.0.0:8080
+Make sure to set GEMINI_API_KEY in .env file
+Admin code is configured (hidden for security)
+📊 Analytics endpoints:
+   - http://localhost:8080/analytics/errors - View image generation error tracking
+Werkzeug appears to be used in a production deployment. Consider switching to a production web server instead.
+ * Serving Flask app 'app'
+ * Debug mode: off

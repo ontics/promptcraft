@@ -285,7 +285,7 @@ def save_vote(voter_id: str, voted_for_player_id: str, voted_for_prompt_id: int,
 
 def upload_image_async(image_data: str, game_id: int, player_id: str, round_id: int, 
                        prompt_id: int, prompt_index: int, player_name: str = None, 
-                       round_number: int = None):
+                       round_number: int = None, callback=None):
     """
     Upload an image to Supabase Storage asynchronously (in background thread).
     Updates the database with the image URL once uploaded.
@@ -299,6 +299,7 @@ def upload_image_async(image_data: str, game_id: int, player_id: str, round_id: 
         prompt_index: Prompt index (for file path, 1-based)
         player_name: Player name (for readable folder structure, optional - will query if not provided)
         round_number: Round number 1, 2, or 3 (for readable folder structure, optional - will query if not provided)
+        callback: Optional callback function(image_url, prompt_id) called after successful upload
     """
     def upload_thread():
         try:
@@ -337,6 +338,13 @@ def upload_image_async(image_data: str, game_id: int, player_id: str, round_id: 
             # Update database with image URL
             if image_url and prompt_id:
                 update_prompt_image_url(prompt_id, image_url)
+                
+                # Call callback if provided (for memory optimization - clear base64 data)
+                if callback:
+                    try:
+                        callback(image_url, prompt_id)
+                    except Exception as e:
+                        print(f"⚠️  Error in upload callback: {e}")
         except Exception as e:
             print(f"❌ Error in async image upload: {e}")
     

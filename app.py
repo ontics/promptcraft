@@ -426,11 +426,31 @@ def handle_join_game(data):
                     for s_id, p in players.items():
                         if not p['is_admin'] and current_round in p['selected_images']:
                             selected_image = p['selected_images'][current_round]
+                            prompt_id = selected_image.get('prompt_id')
+                            
+                            # Prefer image_url, fallback to image_data if URL not available
+                            image_url = selected_image.get('image_url')
+                            if not image_url and prompt_id and db.is_configured():
+                                # Try to fetch from database if not in memory
+                                try:
+                                    result = db.supabase.table('prompts').select('image_url').eq('prompt_id', prompt_id).execute()
+                                    if result.data and result.data[0].get('image_url'):
+                                        image_url = result.data[0]['image_url']
+                                except Exception as e:
+                                    print(f"[RECONNECT] Could not fetch image_url from database for prompt_id {prompt_id}: {e}")
+                            
+                            # Use URL if available, otherwise fallback to base64
+                            image_data = image_url if image_url else selected_image.get('image_data', '')
+                            
                             selected_images.append({
                                 'session_id': s_id,
                                 'player_name': p.get('display_name', p['name']),
-                                'image': selected_image,
-                                'prompt_id': selected_image.get('prompt_id')
+                                'image': {
+                                    'image_url': image_url,
+                                    'image_data': selected_image.get('image_data', '') if not image_url else '',
+                                    'has_url': bool(image_url)
+                                },
+                                'prompt_id': prompt_id
                             })
                     target_image = game_state.get('current_target', {})
                     emit('vote_on_images', {
@@ -448,11 +468,24 @@ def handle_join_game(data):
                     for s_id, p in players.items():
                         if not p['is_admin']:
                             votes = p['votes_received'].get(current_round, 0)
+                            # Use image_url with fallback to image_data
+                            selected_img = p['selected_images'].get(current_round, {})
+                            image_url = selected_img.get('image_url')
+                            if not image_url:
+                                prompt_id = selected_img.get('prompt_id')
+                                if prompt_id and db.is_configured():
+                                    try:
+                                        result = db.supabase.table('prompts').select('image_url').eq('prompt_id', prompt_id).execute()
+                                        if result.data and result.data[0].get('image_url'):
+                                            image_url = result.data[0]['image_url']
+                                    except Exception as e:
+                                        print(f"[RECONNECT] Could not fetch image_url for round_results: {e}")
+                            image_display = image_url if image_url else selected_img.get('image_data', '')
                             results.append({
                                 'player_name': p.get('display_name', p['name']),
                                 'votes': votes,
                                 'total_score': p['score'],
-                                'image': p['selected_images'].get(current_round, {}).get('image_data', '')
+                                'image': image_display
                             })
                     results.sort(key=lambda x: x['total_score'], reverse=True)
                     emit('round_results', {
@@ -1214,6 +1247,21 @@ def handle_send_prompt(data):
                 
                 # Trigger async upload to Supabase Storage (non-blocking)
                 # Pass player_name and round_number for readable folder structure
+                # Add callback to clear base64 data after upload completes (memory optimization)
+                def clear_base64_after_upload(image_url, uploaded_prompt_id):
+                    """Callback to clear base64 data from in-memory image_entry after upload completes"""
+                    if session_id in players:
+                        player = players[session_id]
+                        # Find the image_entry by prompt_id and update it
+                        for img_entry in player['images'].get(current_round, []):
+                            if img_entry.get('prompt_id') == uploaded_prompt_id:
+                                # Store URL and clear base64 data to free memory
+                                img_entry['image_url'] = image_url
+                                if 'image_data' in img_entry:
+                                    del img_entry['image_data']
+                                print(f"[MEMORY] Cleared base64 data for prompt_id {uploaded_prompt_id}, using URL: {image_url[:50]}...")
+                                break
+                
                 db.upload_image_async(
                     image_data=image_data,
                     game_id=game_state['game_id'],
@@ -1222,7 +1270,8 @@ def handle_send_prompt(data):
                     prompt_id=prompt_id,
                     prompt_index=prompt_index,
                     player_name=player['name'],  # For readable folder structure
-                    round_number=current_round  # Round number (1, 2, or 3)
+                    round_number=current_round,  # Round number (1, 2, or 3)
+                    callback=clear_base64_after_upload  # Memory optimization callback
                 )
 
         emit('image_generated', {
@@ -1505,14 +1554,16 @@ def start_transition_to_selection():
     # Show transition screen to all players (non-admin) with timer info
     for p in players.values():
         if not p['is_admin']:
-            emit('show_transition_screen', {
-                'message': "Now you'll get to choose the best image that you created.",
-                'max_wait': 10  # Max 10 seconds before auto-progress
-            }, room=p['socket_id'])
+            socket_id = p.get('socket_id')
+            if socket_id:  # Only send if player is connected
+                socketio.emit('show_transition_screen', {
+                    'message': "Now you'll get to choose the best image that you created.",
+                    'max_wait': 10  # Max 10 seconds before auto-progress
+                }, room=socket_id)
     
     # Notify admin that transition started
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('admin_status_update', {
+        socketio.emit('admin_status_update', {
             'status': 'transitioning',
             'round': game_state['current_round']
         }, room=players[admin_session_id]['socket_id'])
@@ -1587,7 +1638,7 @@ def start_voting_phase():
             if socket_id:  # Only send if player is connected
                 player_count += 1
                 print(f"[VOTING] Emitting voting_started to player {p['name']} (socket: {socket_id})")
-                emit('voting_started', {
+                socketio.emit('voting_started', {
                     'round': current_round,
                     'duration': selection_duration,
                     'start_time': selection_start_time,  # Synchronized start time
@@ -1597,7 +1648,7 @@ def start_voting_phase():
     
     # Notify admin
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('admin_voting_started', {
+        socketio.emit('admin_voting_started', {
             'round': current_round,
             'players': [{
                 'name': p.get('display_name', p['name']),
@@ -1610,7 +1661,7 @@ def start_voting_phase():
         }, room=players[admin_session_id]['socket_id'])
         
         # Also send status update with time remaining
-        emit('admin_status', {
+        socketio.emit('admin_status', {
             'status': 'voting',
             'round': current_round,
             'time_remaining': 30,
@@ -1744,49 +1795,82 @@ def handle_check_selection_status():
         check_all_selected()
 
 def start_voting_on_images():
-    game_state['status'] = 'voting_images'
-    current_round = game_state['current_round']
-    
-    # Track which players were active when voting on images started
-    # This ensures we wait for all players who were present at voting start, even if they disconnect
-    if not game_state.get('voting_active_players'):
-        # Only set if not already set (from selection phase)
-        game_state['voting_active_players'] = [p['session_id'] for p in players.values() 
-                                              if not p.get('is_admin') and p.get('socket_id')]
-        print(f"[VOTING] Tracked {len(game_state['voting_active_players'])} active players at voting start: {game_state['voting_active_players']}")
+    """Start the voting phase where players vote on each other's selected images"""
+    try:
+        game_state['status'] = 'voting_images'
+        current_round = game_state['current_round']
+        
+        # Track which players were active when voting on images started
+        # This ensures we wait for all players who were present at voting start, even if they disconnect
+        if not game_state.get('voting_active_players'):
+            # Only set if not already set (from selection phase)
+            game_state['voting_active_players'] = [p['session_id'] for p in players.values() 
+                                                  if not p.get('is_admin') and p.get('socket_id')]
+            print(f"[VOTING] Tracked {len(game_state['voting_active_players'])} active players at voting start: {game_state['voting_active_players']}")
+        
+        # Log current state for debugging
+        connected_players = [p for p in players.values() if not p.get('is_admin') and p.get('socket_id')]
+        print(f"[VOTING] Starting voting phase: round={current_round}, connected_players={len(connected_players)}, total_players={len([p for p in players.values() if not p.get('is_admin')])}")
 
-    # Gather all selected images with prompt_id (exclude admin)
-    selected_images = []
-    for session_id, player in players.items():
-        if not player['is_admin'] and current_round in player['selected_images']:
-            selected_image = player['selected_images'][current_round]
-            selected_images.append({
-                'session_id': session_id,
-                'player_name': player.get('display_name', player['name']),
-                'image': selected_image,
-                'prompt_id': selected_image.get('prompt_id')  # Include prompt_id for voting
-            })
+        # Gather all selected images with prompt_id (exclude admin)
+        # Use image_url instead of base64 to reduce memory usage
+        selected_images = []
+        for session_id, player in players.items():
+            if not player['is_admin'] and current_round in player['selected_images']:
+                selected_image = player['selected_images'][current_round]
+                prompt_id = selected_image.get('prompt_id')
+                
+                # Prefer image_url, fallback to image_data if URL not available
+                image_url = selected_image.get('image_url')
+                if not image_url and prompt_id and db.is_configured():
+                    # Try to fetch from database if not in memory
+                    try:
+                        result = db.supabase.table('prompts').select('image_url').eq('prompt_id', prompt_id).execute()
+                        if result.data and result.data[0].get('image_url'):
+                            image_url = result.data[0]['image_url']
+                    except Exception as e:
+                        print(f"[VOTING] Could not fetch image_url from database for prompt_id {prompt_id}: {e}")
+                
+                # Use URL if available, otherwise fallback to base64 (for backward compatibility)
+                image_data = image_url if image_url else selected_image.get('image_data', '')
+                
+                selected_images.append({
+                    'session_id': session_id,
+                    'player_name': player.get('display_name', player['name']),
+                    'image': {
+                        'image_url': image_url,  # URL from Supabase
+                        'image_data': selected_image.get('image_data', '') if not image_url else '',  # Fallback base64 only if no URL
+                        'has_url': bool(image_url)  # Flag for client
+                    },
+                    'prompt_id': prompt_id
+                })
 
-    # Get target image for this round
-    target_image = game_state.get('current_target', {})
+        # Get target image for this round
+        target_image = game_state.get('current_target', {})
 
-    # Send images to each player with their own session_id for filtering (non-admin only)
-    # Must check socket_id, None defaults to current request context
-    for target_session_id in players.keys():
-        player = players[target_session_id]
-        if not player['is_admin']:
-            socket_id = player.get('socket_id')
-            if socket_id:  # Only send if player is connected
-                emit('vote_on_images', {
-                    'images': selected_images,
-                    'round': current_round,
-                    'my_session_id': target_session_id,
-                    'target_image': {
-                        'url': target_image.get('url', '')
-                    }
-                }, room=socket_id)
+        # Send images to each player with their own session_id for filtering (non-admin only)
+        # Must check socket_id, None defaults to current request context
+        for target_session_id in players.keys():
+            player = players[target_session_id]
+            if not player['is_admin']:
+                socket_id = player.get('socket_id')
+                if socket_id:  # Only send if player is connected
+                    socketio.emit('vote_on_images', {
+                        'images': selected_images,
+                        'round': current_round,
+                        'my_session_id': target_session_id,
+                        'target_image': {
+                            'url': target_image.get('url', '')
+                        }
+                    }, room=socket_id)
 
-    print("Players now voting on images")
+        print("Players now voting on images")
+    except Exception as e:
+        print(f"❌ ERROR in start_voting_on_images(): {e}")
+        import traceback
+        traceback.print_exc()
+        # Try to recover by logging state
+        print(f"[ERROR] Game state: status={game_state.get('status')}, round={game_state.get('current_round')}, players={len(players)}")
 
 @socketio.on('cast_vote')
 def handle_cast_vote(data):
@@ -1868,29 +1952,64 @@ def show_round_results():
             player['round_scores'][current_round - 1] = votes
             player['score'] += votes
 
+            # Use image_url with fallback to image_data for round results
+            selected_img = player['selected_images'].get(current_round, {})
+            image_url = selected_img.get('image_url')
+            if not image_url:
+                # Try to fetch from database if not in memory
+                prompt_id = selected_img.get('prompt_id')
+                if prompt_id and db.is_configured():
+                    try:
+                        result = db.supabase.table('prompts').select('image_url').eq('prompt_id', prompt_id).execute()
+                        if result.data and result.data[0].get('image_url'):
+                            image_url = result.data[0]['image_url']
+                    except Exception as e:
+                        print(f"[RESULTS] Could not fetch image_url from database for prompt_id {prompt_id}: {e}")
+            
+            # Use URL if available, otherwise fallback to base64
+            image_display = image_url if image_url else selected_img.get('image_data', '')
+            
             results.append({
                 'player_name': player.get('display_name', player['name']),
                 'votes': votes,
                 'total_score': player['score'],
-                'image': player['selected_images'].get(current_round, {}).get('image_data', '')
+                'image': image_display
             })
 
     # Sort by total score for overall leaderboard
     results.sort(key=lambda x: x['total_score'], reverse=True)
+    
+    # Clear old round data after round completes (memory optimization)
+    # Clear image_data from completed rounds, keep URLs and metadata
+    for p in players.values():
+        if not p['is_admin']:
+            for round_num in [1, 2, 3]:
+                if round_num < current_round:
+                    # Clear image_data from all images in completed rounds (keep URLs)
+                    if round_num in p['images']:
+                        for img in p['images'][round_num]:
+                            if 'image_data' in img and img.get('image_url'):
+                                del img['image_data']
+                    # Also clear image_data from selected_images for completed rounds
+                    if round_num in p['selected_images']:
+                        selected = p['selected_images'][round_num]
+                        if 'image_data' in selected and selected.get('image_url'):
+                            del selected['image_data']
+    print(f"[MEMORY] Cleared image_data from completed rounds (rounds < {current_round})")
 
     # Send to players only (not admin) - must check socket_id, None defaults to current request context
     for p in players.values():
         if not p['is_admin']:
             socket_id = p.get('socket_id')
             if socket_id:  # Only send if player is connected
-                emit('round_results', {
+                socketio.emit('round_results', {
                     'round': current_round,
                     'results': results
                 }, room=socket_id)
     
     # Send admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('admin_round_results', {
+        socketio.emit('admin_round_results', {
             'round': current_round,
             'results': results,
             'players': [{
@@ -1938,6 +2057,21 @@ def handle_next_round():
                 p['prompt_count'] = 0  # Reset prompt count for avatar state
                 p['has_successful_prompt'][round_num] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round {round_num}")
+                
+                # Clear old round data (memory optimization)
+                for prev_round in [1, 2, 3]:
+                    if prev_round < round_num:
+                        # Clear image_data from all images in completed rounds (keep URLs)
+                        if prev_round in p['images']:
+                            for img in p['images'][prev_round]:
+                                if 'image_data' in img and img.get('image_url'):
+                                    del img['image_data']
+                        # Also clear image_data from selected_images for completed rounds
+                        if prev_round in p['selected_images']:
+                            selected = p['selected_images'][prev_round]
+                            if 'image_data' in selected and selected.get('image_url'):
+                                del selected['image_data']
+        print(f"[MEMORY] Cleared image_data from completed rounds (rounds < {round_num})")
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
         for p in players.values():
@@ -2012,13 +2146,13 @@ def end_game():
         if not p['is_admin']:
             socket_id = p.get('socket_id')
             if socket_id:  # Only send if player is connected
-                emit('game_over', {
+                socketio.emit('game_over', {
                     'results': final_results
                 }, room=socket_id)
     
     # Send admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('admin_game_over', {
+        socketio.emit('admin_game_over', {
             'results': final_results,
             'players': [{
                 'name': p.get('display_name', p['name']),
@@ -2328,6 +2462,107 @@ def handle_remove_player(data):
     
     print(f"Player {player_name} (session: {target_session_id}) removed by admin")
 
+@socketio.on('set_player_team')
+def handle_set_player_team(data):
+    """Admin-only: Manually set a player's team"""
+    session_id = session.get('session_id')
+    
+    # Check if player is admin
+    if session_id != admin_session_id:
+        emit('error', {'message': 'Only admin can set player teams'})
+        return
+    
+    target_session_id = data.get('session_id')
+    team = data.get('team')
+    
+    if not target_session_id or not team:
+        emit('error', {'message': 'Missing session_id or team'})
+        return
+    
+    if team not in ['Green', 'Orange']:
+        emit('error', {'message': 'Team must be "Green" or "Orange"'})
+        return
+    
+    # Check if player exists
+    if target_session_id not in players:
+        emit('error', {'message': 'Player not found'})
+        return
+    
+    player = players[target_session_id]
+    
+    # Don't allow changing admin's team
+    if player['is_admin']:
+        emit('error', {'message': 'Cannot change admin team'})
+        return
+    
+    # Set team and character
+    player['team'] = team
+    player['character'] = get_character(team)
+    
+    # Update database if game has started
+    if game_state.get('game_id') and db.is_configured():
+        db.create_player(
+            game_id=game_state['game_id'],
+            player_id=target_session_id,
+            player_name=player['name'],
+            team=team,
+            character=player['character']
+        )
+    
+    # Broadcast updated lobby
+    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+    emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+    
+    # Update admin view
+    if admin_session_id in players and players[admin_session_id].get('socket_id'):
+        emit('player_status_update', {
+            'players': [{
+                'name': p.get('display_name', p['name']),
+                'team': p['team'],
+                'is_admin': p['is_admin'],
+                'is_connected': p.get('socket_id') is not None,
+                'session_id': p['session_id']
+            } for p in players.values()]
+        }, room=players[admin_session_id]['socket_id'])
+    
+    print(f"Admin set player {player.get('display_name', player['name'])} to team {team}")
+
+def set_player_team_console(target_session_id: str, team: str):
+    """Console command: Set a player's team manually"""
+    if team not in ['Green', 'Orange']:
+        print(f"❌ ERROR: Team must be 'Green' or 'Orange'")
+        return
+    
+    if target_session_id not in players:
+        print(f"❌ ERROR: Player not found: {target_session_id}")
+        return
+    
+    player = players[target_session_id]
+    
+    if player['is_admin']:
+        print(f"❌ ERROR: Cannot change admin team")
+        return
+    
+    # Set team and character
+    player['team'] = team
+    player['character'] = get_character(team)
+    
+    # Update database if game has started
+    if game_state.get('game_id') and db.is_configured():
+        db.create_player(
+            game_id=game_state['game_id'],
+            player_id=target_session_id,
+            player_name=player['name'],
+            team=team,
+            character=player['character']
+        )
+    
+    # Broadcast updated lobby
+    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+    socketio.emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+    
+    print(f"✅ Set player {player.get('display_name', player['name'])} to team {team}")
+
 # Console command functions for Railway admin controls
 # 
 # Usage from Railway console:
@@ -2512,6 +2747,18 @@ def console_restart_game():
     """HTTP endpoint for restarting game"""
     result = restart_game_console()
     return {'success': result, 'status': game_state['status']}, 200 if result else 400
+
+@app.route('/admin/console/set-player-team', methods=['POST'])
+def console_set_player_team():
+    """HTTP endpoint for setting player team"""
+    import json
+    data = request.get_json() or {}
+    target_session_id = data.get('session_id')
+    team = data.get('team')
+    if not target_session_id or not team:
+        return {'success': False, 'error': 'Missing session_id or team'}, 400
+    set_player_team_console(target_session_id, team)
+    return {'success': True}
 
 if __name__ == '__main__':
     # Get port from environment variable (for Railway/deployment) or default to 8000
