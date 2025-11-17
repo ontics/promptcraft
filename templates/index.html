@@ -47,7 +47,7 @@
                             <div class="howto-avatar" style="justify-content: center;">
                                 <button id="onboarding-prev" class="onboarding-arrow" aria-label="Previous">&lt;</button>
                                 <div id="onboarding-avatar" class="onboarding-avatar" title="Bud">
-                                    <img id="onboarding-bud-img" src="/static/images/avatars/bud/bud_smiling.svg" alt="Bud" style="width: 80%; height: 80%; object-fit: contain;">
+                                    <div id="onboarding-bud-img" style="width: 80%; height: 80%; display: flex; align-items: center; justify-content: center;"></div>
                                 </div>
                                 <button id="onboarding-next" class="onboarding-arrow" aria-label="Next">&gt;</button>
                             </div>
@@ -138,7 +138,7 @@
                                 <p id="character-bubble-text"></p>
                             </div>
                             <div id="character-avatar-large" class="character-avatar-large">
-                                <img id="avatar-svg" src="" alt="Character Avatar" style="width: 100%; height: 100%; object-fit: contain; display: none;">
+                                <div id="avatar-svg-container" style="width: 100%; height: 100%; display: none;"></div>
                             </div>
                         </div>
                     </div>
@@ -232,6 +232,7 @@
         </div>
     </div>
 
+    <script src="{{ url_for('static', filename='js/inline-svg-data.js') }}"></script>
     <script src="{{ url_for('static', filename='js/game.js') }}"></script>
 </body>
 </html>

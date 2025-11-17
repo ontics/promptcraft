@@ -35,68 +35,7 @@ const screens = {
 };
 
 // Avatar image cache for performance (prevents repeated HTTP requests)
-const avatarImageCache = {};
-
-/**
- * Preload all avatar images to cache them and prevent repeated HTTP requests
- */
-function preloadAvatarImages() {
-    const imagesToPreload = [
-        // Bud images
-        '/static/images/avatars/bud/bud_smiling.svg',
-        '/static/images/avatars/bud/bud_talking.svg',
-        '/static/images/avatars/bud/bud_sad.svg',
-        '/static/images/avatars/bud/bud_sad_talking.svg',
-        '/static/images/avatars/bud/bud_welling.svg',
-        '/static/images/avatars/bud/bud_crying.svg',
-        // Spud base images
-        '/static/images/avatars/spud/base/spud_base_smiling.svg',
-        '/static/images/avatars/spud/base/spud_base_talking.svg',
-        '/static/images/avatars/spud/base/spud_base_sad.svg',
-        '/static/images/avatars/spud/base/spud_base_sad_talking.svg',
-        '/static/images/avatars/spud/base/spud_base_welling.svg',
-        '/static/images/avatars/spud/base/spud_base_crying.svg',
-        // Spud yellow images
-        '/static/images/avatars/spud/yellow/spud_yellow_sad.svg',
-        '/static/images/avatars/spud/yellow/spud_yellow_sad_talking.svg',
-        '/static/images/avatars/spud/yellow/spud_yellow_welling.svg',
-        '/static/images/avatars/spud/yellow/spud_yellow_crying.svg',
-        // Spud dry images
-        '/static/images/avatars/spud/dry/spud_dry_sad.svg',
-        '/static/images/avatars/spud/dry/spud_dry_sad_talking.svg',
-        '/static/images/avatars/spud/dry/spud_dry_welling.svg',
-        '/static/images/avatars/spud/dry/spud_dry_crying.svg',
-    ];
-    
-    imagesToPreload.forEach(path => {
-        const img = new Image();
-        img.src = path;
-        avatarImageCache[path] = img;
-    });
-}
-
-/**
- * Set image src only if it's different from current src (prevents unnecessary HTTP requests)
- */
-function setImageSrcSafely(imgElement, newSrc) {
-    if (!imgElement) return;
-    
-    // Convert to absolute URL for comparison
-    const currentSrc = imgElement.src;
-    const absoluteNewSrc = newSrc.startsWith('http') 
-        ? newSrc 
-        : window.location.origin + newSrc;
-    
-    // Only update if different
-    if (currentSrc !== absoluteNewSrc) {
-        // Use cached image if available, otherwise load normally
-        if (avatarImageCache[newSrc]) {
-            imgElement.src = avatarImageCache[newSrc].src;
-        } else {
-            imgElement.src = newSrc;
-        }
-    }
-}
+// Avatar images are now embedded inline - no preloading or HTTP requests needed!
 
 // Onboarding (How to Play) - Bud messages
 const onboarding = {
@@ -123,10 +62,12 @@ function onboardingStartTalking() {
     let showTalking = false;
     onboarding.animTimer = setInterval(() => {
         showTalking = !showTalking;
-        const newSrc = showTalking
-            ? "/static/images/avatars/bud/bud_talking.svg"
-            : "/static/images/avatars/bud/bud_smiling.svg";
-        setImageSrcSafely(img, newSrc);
+        // Use inline SVG data instead of HTTP requests
+        const svgKey = showTalking ? 'bud/bud_talking' : 'bud/bud_smiling';
+        const svgContent = inlineSVGData[svgKey];
+        if (svgContent) {
+            img.innerHTML = svgContent;
+        }
     }, 500);
 }
 
@@ -137,7 +78,11 @@ function onboardingStopTalking() {
     }
     const img = document.getElementById('onboarding-bud-img');
     if (img) {
-        setImageSrcSafely(img, "/static/images/avatars/bud/bud_smiling.svg");
+        // Use inline SVG data instead of HTTP requests
+        const svgContent = inlineSVGData['bud/bud_smiling'];
+        if (svgContent) {
+            img.innerHTML = svgContent;
+        }
     }
 }
 
@@ -146,11 +91,20 @@ function setOnboardingMessage(index) {
     const text = document.getElementById('onboarding-text');
     const prevBtn = document.getElementById('onboarding-prev');
     const nextBtn = document.getElementById('onboarding-next');
+    const budImg = document.getElementById('onboarding-bud-img');
     if (!bubble || !text || !prevBtn || !nextBtn) return;
     onboarding.index = Math.max(0, Math.min(index, onboarding.messages.length - 1));
     text.textContent = onboarding.messages[onboarding.index];
     bubble.style.display = 'block';
     prevBtn.disabled = onboarding.index === 0;
+    
+    // Initialize avatar with inline SVG if not already set
+    if (budImg && !budImg.innerHTML && inlineSVGData) {
+        const svgContent = inlineSVGData['bud/bud_smiling'];
+        if (svgContent) {
+            budImg.innerHTML = svgContent;
+        }
+    }
     nextBtn.disabled = onboarding.index === onboarding.messages.length - 1;
     // Animate Bud while a message is displayed
     onboardingStartTalking();
@@ -189,8 +143,6 @@ function initOnboardingIfNeeded() {
 }
 // Ensure onboarding shows immediately on landing in the lobby
 document.addEventListener('DOMContentLoaded', () => {
-    // Preload all avatar images for performance
-    preloadAvatarImages();
     initOnboardingIfNeeded();
 });
 // Utility function to show screen
@@ -811,6 +763,47 @@ socket.on('game_started', (data) => {
     // Set up initial avatar state based on character data from server
     if (data.character) {
         updateAvatarState(data.character);
+        
+        // Display welcome message if present (lasts 20 seconds or until first prompt)
+        if (data.character.message) {
+            const messageBubble = document.getElementById('character-bubble');
+            const messageText = document.getElementById('character-bubble-text');
+            
+            // Clear any existing message auto-hide timer
+            if (gameState.messageAutoHideTimer) {
+                clearTimeout(gameState.messageAutoHideTimer);
+                gameState.messageAutoHideTimer = null;
+            }
+            
+            // Display the welcome message
+            messageText.textContent = data.character.message;
+            messageBubble.style.display = 'block';
+            
+            // Style based on character
+            if (data.character.character === 'Spud') {
+                messageBubble.style.background = '#ffe8e8';
+                messageBubble.style.borderLeft = '4px solid #ff6b6b';
+                messageBubble.style.setProperty('--bubble-color', '#ffe8e8');
+            } else {
+                messageBubble.style.background = '#fff3bf';
+                messageBubble.style.borderLeft = '4px solid #fab005';
+                messageBubble.style.setProperty('--bubble-color', '#fff3bf');
+            }
+            
+            // Auto-hide message after 20 seconds
+            gameState.messageAutoHideTimer = setTimeout(() => {
+                messageBubble.style.display = 'none';
+                stopCharacterTalking();
+                // Return to static animation state (no message)
+                updateAvatarState({
+                    character: data.character.character,
+                    animation_state: data.character.animation_state,
+                    plant_state: data.character.plant_state,
+                    message: null
+                });
+                gameState.messageAutoHideTimer = null;
+            }, 20000);  // 20 seconds
+        }
     } else {
         // Fallback: use old setupCharacterAvatar if no character data
     setupCharacterAvatar();
@@ -823,24 +816,21 @@ socket.on('game_started', (data) => {
 });
 
 /**
- * Load and display avatar SVG based on character and state
+ * Load and display avatar SVG based on character and state (using inline SVGs)
  */
 function loadAvatarSVG(character, plantState = null, animationState = 'smiling') {
-    const avatarImg = document.getElementById('avatar-svg');
+    const avatarContainer = document.getElementById('avatar-svg-container');
     const avatarLarge = document.getElementById('character-avatar-large');
     
-    if (!avatarImg || !avatarLarge) return;
+    if (!avatarContainer || !avatarLarge) return;
     
-    let svgPath = '';
-    
+    // Build the key for the inline SVG data
+    let svgKey = '';
     if (character === 'Bud') {
-        // Bud: just use animation state (smiling or talking)
-        svgPath = `/static/images/avatars/bud/bud_${animationState}.svg`;
+        svgKey = `bud/bud_${animationState}`;
         avatarLarge.className = 'character-avatar-large';
     } else if (character === 'Spud') {
-        // Spud: use plant state + animation state
-        // Handle missing files by falling back to available states
-        svgPath = `/static/images/avatars/spud/${plantState}/spud_${plantState}_${animationState}.svg`;
+        svgKey = `spud/${plantState}/spud_${plantState}_${animationState}`;
         avatarLarge.className = 'character-avatar-large spuddy';
         
         // Add wilted class for visual effect
@@ -853,36 +843,31 @@ function loadAvatarSVG(character, plantState = null, animationState = 'smiling')
         }
     }
     
-    // Load the SVG (only update src if different to prevent unnecessary HTTP requests)
-    if (svgPath) {
-        setImageSrcSafely(avatarImg, svgPath);
-        avatarImg.style.display = 'block';
-        avatarImg.onerror = function() {
-            console.error(`Failed to load avatar: ${svgPath}`);
-            // Fallback logic for missing files
-            if (character === 'Spud') {
-                // Try alternative states
-                if (animationState === 'talking' && plantState !== 'base') {
-                    // If talking state missing for yellow/dry, try welling or sad
-                    if (plantState === 'yellow') {
-                        loadAvatarSVG('Spud', 'yellow', 'welling');
-                    } else if (plantState === 'dry') {
-                        loadAvatarSVG('Spud', 'dry', 'sad');
-                    }
-                } else if (animationState !== 'smiling') {
-                    // Fallback to smiling state
-                    loadAvatarSVG('Spud', plantState, 'smiling');
-                } else {
-                    // Last resort: try base plant state
-                    if (plantState !== 'base') {
-                        loadAvatarSVG('Spud', 'base', 'smiling');
-                    }
+    // Get SVG content from inline data
+    const svgContent = inlineSVGData[svgKey];
+    if (svgContent) {
+        // Inject inline SVG directly into container (no HTTP request!)
+        avatarContainer.innerHTML = svgContent;
+        avatarContainer.style.display = 'block';
+    } else {
+        console.error(`SVG not found in inline data: ${svgKey}`);
+        // Fallback logic for missing SVGs
+        if (character === 'Spud') {
+            if (animationState === 'talking' && plantState !== 'base') {
+                if (plantState === 'yellow') {
+                    loadAvatarSVG('Spud', 'yellow', 'welling');
+                } else if (plantState === 'dry') {
+                    loadAvatarSVG('Spud', 'dry', 'sad');
                 }
-            } else if (character === 'Bud' && animationState !== 'smiling') {
-                // Bud fallback to smiling
-                loadAvatarSVG('Bud', null, 'smiling');
+            } else if (animationState !== 'smiling') {
+                loadAvatarSVG('Spud', plantState, 'smiling');
+            } else if (plantState !== 'base') {
+                loadAvatarSVG('Spud', 'base', 'smiling');
             }
-        };
+        } else if (character === 'Bud' && animationState !== 'smiling') {
+            loadAvatarSVG('Bud', null, 'smiling');
+        }
+        return;
     }
     
     // Store current state
@@ -1583,9 +1568,7 @@ socket.on('game_over', (data) => {
             <div class="result-rank">${rankEmoji}</div>
             <div class="result-info">
                 <h3>${result.player_name}</h3>
-                <p>${result.team} - ${result.character}</p>
                 <p>Round Scores: ${result.round_scores.join(', ')}</p>
-                <p>Total Prompts: ${result.prompt_count}</p>
             </div>
             <div class="result-score">${result.total_score}</div>
         `;

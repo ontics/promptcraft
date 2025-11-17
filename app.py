@@ -853,6 +853,11 @@ def handle_start_game():
                         character_data['plant_state'] = 'base'
                         character_data['animation_state'] = 'smiling'
                         character_data['prompt_count'] = 0
+                    
+                    # Add welcome message for round start
+                    welcome_message = get_welcome_message(p, 1)
+                    if welcome_message:
+                        character_data['message'] = welcome_message
 
                     emit('game_started', {
                         'round': 1,
@@ -1434,6 +1439,23 @@ def is_small_image(file_size_kb, threshold_kb=50):
     if file_size_kb is None:
         return False
     return file_size_kb < threshold_kb
+
+def get_welcome_message(player, current_round):
+    """
+    Get welcome message when player first lands on the round screen.
+    Round 1: Bud says "Let's go!"
+    Rounds 2 and 3: Bud/Spud says "Back for more? Prompt wisely..."
+    """
+    if current_round == 1:
+        # Round 1: Only Bud says welcome message
+        character = get_character_for_round(player, current_round)
+        if character == 'Bud':
+            return "Let's go!"
+    else:
+        # Rounds 2 and 3: Both Bud and Spud say welcome message
+        return "Back for more? Prompt wisely..."
+    
+    return None
 
 def get_character_message(player, current_round):
     """
@@ -2131,6 +2153,11 @@ def handle_next_round():
                         character_data['plant_state'] = 'base'
                         character_data['animation_state'] = 'smiling'
                         character_data['prompt_count'] = 0
+                    
+                    # Add welcome message for round start
+                    welcome_message = get_welcome_message(p, game_state['current_round'])
+                    if welcome_message:
+                        character_data['message'] = welcome_message
 
                     emit('game_started', {
                         'round': game_state['current_round'],
