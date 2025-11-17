@@ -6,6 +6,7 @@ import os
 import random
 import time
 import base64
+import gc
 from datetime import datetime
 from dotenv import load_dotenv
 import io
@@ -1574,6 +1575,45 @@ def start_transition_to_selection():
     game_state['transition_min_duration'] = 5  # Minimum 5 seconds
     game_state['transition_max_duration'] = 10  # Maximum 10 seconds
     
+    # Aggressive memory clearing during transition (before selection screen)
+    # Clear base64 image data for current round - only keep if URL exists (upload completed)
+    current_round = game_state['current_round']
+    cleared_count = 0
+    kept_count = 0
+    
+    for p in players.values():
+        if not p['is_admin']:
+            if current_round in p['images']:
+                for img in p['images'][current_round]:
+                    # Only clear if image_url exists (upload completed) - safe to clear base64
+                    if img.get('image_url') and 'image_data' in img:
+                        del img['image_data']
+                        cleared_count += 1
+                    elif 'image_data' in img:
+                        # Keep base64 for images still uploading (fallback for selection screen)
+                        kept_count += 1
+            
+            # Also clear completed rounds aggressively
+            for round_num in [1, 2, 3]:
+                if round_num < current_round:
+                    # Force clear all image_data from completed rounds
+                    if round_num in p['images']:
+                        for img in p['images'][round_num]:
+                            if 'image_data' in img:
+                                del img['image_data']
+                                cleared_count += 1
+                    if round_num in p['selected_images']:
+                        selected = p['selected_images'][round_num]
+                        if 'image_data' in selected:
+                            del selected['image_data']
+                            cleared_count += 1
+    
+    print(f"[MEMORY] Transition clearing: {cleared_count} images cleared, {kept_count} kept (still uploading)")
+    
+    # Force garbage collection to free memory immediately
+    gc.collect()
+    print(f"[MEMORY] Garbage collection completed after transition clearing")
+    
     # Show transition screen to all players (non-admin) with timer info
     for p in players.values():
         if not p['is_admin']:
@@ -1855,16 +1895,21 @@ def start_voting_on_images():
         connected_players = [p for p in players.values() if not p.get('is_admin') and p.get('socket_id')]
         print(f"[VOTING] Starting voting phase: round={current_round}, connected_players={len(connected_players)}, total_players={len([p for p in players.values() if not p.get('is_admin')])}")
         
-        # Clear base64 from current round's images when voting starts (except selected image, needed temporarily)
+        # Additional memory clearing when voting starts (clear any remaining base64)
+        # Most should already be cleared during transition, but clear any stragglers
         for p in players.values():
             if not p['is_admin']:
                 if current_round in p['images']:
                     selected_prompt_id = p['selected_images'].get(current_round, {}).get('prompt_id')
                     for img in p['images'][current_round]:
-                        # Keep base64 only for selected image (needed for round results until URL is ready)
+                        # Keep base64 only for selected image if URL not ready yet
                         if img.get('prompt_id') != selected_prompt_id and 'image_data' in img:
                             del img['image_data']
-        print(f"[MEMORY] Cleared image_data from current round's non-selected images when voting started")
+                        # Also clear selected image base64 if URL exists
+                        elif img.get('prompt_id') == selected_prompt_id and img.get('image_url') and 'image_data' in img:
+                            del img['image_data']
+        print(f"[MEMORY] Cleared remaining image_data from current round when voting started")
+        gc.collect()
 
         # Gather all selected images with prompt_id (exclude admin)
         # Use image_url instead of base64 to reduce memory usage
@@ -2059,6 +2104,10 @@ def show_round_results():
                 if 'image_data' in selected:
                     del selected['image_data']  # Force clear, URL should be available by now
     print(f"[MEMORY] Cleared image_data from current round's selected images")
+    
+    # Force garbage collection after round results
+    gc.collect()
+    print(f"[MEMORY] Garbage collection completed after round results")
 
     # Send to players only (not admin) - must check socket_id, None defaults to current request context
     for p in players.values():
@@ -2135,6 +2184,10 @@ def handle_next_round():
                             if 'image_data' in selected:
                                 del selected['image_data']  # Force clear
         print(f"[MEMORY] Force cleared image_data from completed rounds (rounds < {round_num})")
+        
+        # Force garbage collection after clearing old round data
+        gc.collect()
+        print(f"[MEMORY] Garbage collection completed after next round start")
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
         for p in players.values():
@@ -2378,10 +2431,29 @@ def handle_restart_game():
                 'message': 'The game has been restarted. Please rejoin to continue.'
             }, room=player['socket_id'])
     
+    # Clear all image data from players before deleting them (aggressive memory clearing)
+    for sess_id in players_to_remove:
+        if sess_id in players:
+            player = players[sess_id]
+            # Clear all image data from all rounds
+            for round_num in [1, 2, 3]:
+                if round_num in player.get('images', {}):
+                    for img in player['images'][round_num]:
+                        if 'image_data' in img:
+                            del img['image_data']
+                if round_num in player.get('selected_images', {}):
+                    selected = player['selected_images'][round_num]
+                    if isinstance(selected, dict) and 'image_data' in selected:
+                        del selected['image_data']
+    
     # Remove all players from dictionary (including admin)
     for sess_id in players_to_remove:
         if sess_id in players:
             del players[sess_id]
+    
+    # Force garbage collection after clearing all players
+    gc.collect()
+    print(f"[MEMORY] Garbage collection completed after game restart")
     
     # Clear admin_session_id
     admin_session_id = None
