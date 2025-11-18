@@ -57,11 +57,17 @@ def create_game(total_players: int) -> Optional[int]:
 
 
 def end_game(game_id: int, rounds_completed: int):
-    """Mark a game as ended in the database."""
+    """Mark a game as ended in the database. Idempotent - won't duplicate if already ended."""
     if not is_configured() or not game_id:
         return
     
     try:
+        # Check if game is already ended to avoid duplicate calls
+        result = supabase.table('games').select('ended_at').eq('game_id', game_id).execute()
+        if result.data and result.data[0].get('ended_at'):
+            # Game already ended, skip
+            return
+        
         supabase.table('games').update({
             'ended_at': datetime.utcnow().isoformat(),
             'rounds_completed': rounds_completed
@@ -98,11 +104,17 @@ def create_round(game_id: int, round_number: int) -> Optional[int]:
 
 
 def end_round(round_id: int):
-    """Mark a round as ended in the database."""
+    """Mark a round as ended in the database. Idempotent - won't duplicate if already ended."""
     if not is_configured() or not round_id:
         return
     
     try:
+        # Check if round is already ended to avoid duplicate calls
+        result = supabase.table('rounds').select('ended_at').eq('round_id', round_id).execute()
+        if result.data and result.data[0].get('ended_at'):
+            # Round already ended, skip
+            return
+        
         supabase.table('rounds').update({
             'ended_at': datetime.utcnow().isoformat()
         }).eq('round_id', round_id).execute()
@@ -167,10 +179,12 @@ def upload_image_to_storage(image_bytes: bytes, file_path: str) -> Optional[str]
         
         # Get public URL
         url = supabase.storage.from_('generated-images').get_public_url(file_path)
-        print(f"✅ Uploaded image to Storage: {file_path}")
+        print(f"✅ Uploaded image to Storage: {file_path} ({len(image_bytes)} bytes)")
         return url
     except Exception as e:
         print(f"❌ Error uploading image to Storage: {e}")
+        print(f"   File path: {file_path}")
+        print(f"   File size: {len(image_bytes)} bytes")
         return None
 
 
@@ -246,12 +260,15 @@ def update_prompt_image_url(prompt_id: int, image_url: str):
 
 
 def save_image_selection(player_id: str, round_id: int, game_id: int, prompt_id: int):
-    """Save a player's image selection."""
+    """Save a player's image selection. Uses upsert to handle duplicate selections gracefully."""
     if not is_configured() or not game_id or not round_id:
         return
     
     try:
-        supabase.table('image_selections').insert({
+        # Use upsert to handle cases where selection already exists (retries, reconnections, etc.)
+        # The unique constraint on (player_id, round_id) will cause upsert to update if exists, insert if not
+        # Supabase Python client automatically detects unique constraints for conflict resolution
+        supabase.table('image_selections').upsert({
             'player_id': player_id,
             'round_id': round_id,
             'game_id': game_id,
@@ -332,8 +349,24 @@ def upload_image_async(image_data: str, game_id: int, player_id: str, round_id: 
                 print(f"⚠️  Warning: Could not get player_name or round_number, using old folder structure")
                 file_path = f"{game_id}/{player_id}/{round_id}/{prompt_id}.png"
             
-            # Upload to Supabase Storage
-            image_url = upload_image_to_storage(image_bytes, file_path)
+            # Upload to Supabase Storage with retry logic
+            max_retries = 3
+            retry_delay = 1  # Start with 1 second
+            image_url = None
+            
+            for attempt in range(max_retries):
+                try:
+                    image_url = upload_image_to_storage(image_bytes, file_path)
+                    if image_url:
+                        break  # Success!
+                except Exception as e:
+                    if attempt < max_retries - 1:
+                        print(f"⚠️  Upload attempt {attempt + 1} failed: {e}. Retrying in {retry_delay}s...")
+                        import time
+                        time.sleep(retry_delay)
+                        retry_delay *= 2  # Exponential backoff
+                    else:
+                        print(f"❌ All {max_retries} upload attempts failed for {file_path}: {e}")
             
             # Update database with image URL
             if image_url and prompt_id:
@@ -345,8 +378,13 @@ def upload_image_async(image_data: str, game_id: int, player_id: str, round_id: 
                         callback(image_url, prompt_id)
                     except Exception as e:
                         print(f"⚠️  Error in upload callback: {e}")
+            elif not image_url:
+                # Upload failed - log warning that base64 will be kept as fallback
+                print(f"⚠️  Upload failed for prompt_id {prompt_id} (file_path: {file_path}). Base64 data will be kept as fallback.")
         except Exception as e:
             print(f"❌ Error in async image upload: {e}")
+            import traceback
+            traceback.print_exc()
     
     # Start upload in background thread
     thread = threading.Thread(target=upload_thread, daemon=True)

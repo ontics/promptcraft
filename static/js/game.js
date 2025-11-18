@@ -20,7 +20,11 @@ let gameState = {
     avatarPlantState: null,  // 'base', 'yellow', 'dry' (for Spud)
     avatarAnimationState: null,  // 'smiling', 'talking', 'welling', 'sad', 'sad_talking', 'crying'
     avatarAnimationInterval: null,  // For talking animations
-    hasConfirmedSelection: false    // Track if player confirmed their selection
+    hasConfirmedSelection: false,    // Track if player confirmed their selection
+    // Admin time calculation (client-side)
+    roundEndTime: null,  // Unix timestamp for round end
+    votingStartTime: null,  // Unix timestamp for voting start
+    votingDuration: null  // Duration in seconds
 };
 
 // DOM elements
@@ -385,7 +389,12 @@ socket.on('admin_game_started', (data) => {
     document.getElementById('admin-status').textContent = 'Playing';
     document.getElementById('admin-target').textContent = `Round ${data.round} Target`;
     
-    // Update time remaining
+    // Store round end time for client-side calculation
+    if (data.round_end_time) {
+        gameState.roundEndTime = data.round_end_time;
+    }
+    
+    // Update time remaining (initial value)
     if (data.time_remaining !== null && data.time_remaining !== undefined) {
         const minutes = Math.floor(data.time_remaining / 60);
         const seconds = Math.floor(data.time_remaining % 60);
@@ -394,8 +403,8 @@ socket.on('admin_game_started', (data) => {
         document.getElementById('admin-time-remaining').textContent = '-';
     }
     
-    // Start admin timer updates
-    startAdminTimer();
+    // Start client-side time calculation (no server polling)
+    startAdminTimeCalculation();
     
     // Update admin player list
     updateAdminPlayerList(data.players);
@@ -410,38 +419,47 @@ socket.on('admin_voting_started', (data) => {
         adminScreen.style.display = 'block';
     }
     
+    // Store voting start time and duration for client-side calculation
+    if (data.voting_start_time && data.voting_duration) {
+        gameState.votingStartTime = data.voting_start_time;
+        gameState.votingDuration = data.voting_duration;
+    }
+    
     // Update admin status
     document.getElementById('admin-status').textContent = 'Voting (Selection)';
-    document.getElementById('admin-time-remaining').textContent = '0:30'; // 30 seconds for selection
+    
+    // Calculate initial time remaining
+    if (data.voting_start_time && data.voting_duration) {
+        const elapsed = (Date.now() / 1000) - data.voting_start_time;
+        const remaining = Math.max(0, data.voting_duration - elapsed);
+        const minutes = Math.floor(remaining / 60);
+        const seconds = Math.floor(remaining % 60);
+        document.getElementById('admin-time-remaining').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    } else {
+        document.getElementById('admin-time-remaining').textContent = '0:30';
+    }
+    
+    // Start client-side time calculation for voting
+    startAdminTimeCalculation();
     
     // Update admin player list with selection status
     updateAdminPlayerList(data.players);
 });
 
 socket.on('player_status_update', (data) => {
+    console.log('player_status_update received:', data.players?.length || 0, 'players, isAdmin:', gameState.isAdmin);
+    if (data.players) {
+        console.log('Team assignments in update:', data.players.map(p => ({name: p.name, team: p.team})));
+    }
     if (gameState.isAdmin) {
         updateAdminPlayerList(data.players);
+    } else {
+        console.warn('player_status_update received but user is not admin');
     }
 });
 
-socket.on('admin_status', (data) => {
-    if (gameState.isAdmin) {
-        document.getElementById('admin-round').textContent = data.round;
-        document.getElementById('admin-status').textContent = data.status;
-        document.getElementById('admin-target').textContent = `Round ${data.round} Target`;
-        
-        // Update time remaining
-        if (data.time_remaining !== null && data.time_remaining !== undefined) {
-            const minutes = Math.floor(data.time_remaining / 60);
-            const seconds = Math.floor(data.time_remaining % 60);
-            document.getElementById('admin-time-remaining').textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        } else {
-            document.getElementById('admin-time-remaining').textContent = '-';
-        }
-        
-        updateAdminPlayerList(data.players);
-    }
-});
+// Note: admin_status handler removed - we no longer poll for status updates
+// All updates now come via events (player_prompt_updated, player_selected_image, player_voted, etc.)
 
 socket.on('admin_status_update', (data) => {
     if (gameState.isAdmin) {
@@ -452,15 +470,44 @@ socket.on('admin_status_update', (data) => {
     }
 });
 
-function startAdminTimer() {
-    // Update admin timer every second
+// Client-side time calculation (no server polling)
+function startAdminTimeCalculation() {
+    // Clear any existing timer
     if (adminTimerInterval) {
         clearInterval(adminTimerInterval);
     }
     
+    // Update time remaining every second using client-side calculation
     adminTimerInterval = setInterval(() => {
-        if (gameState.isAdmin) {
-            socket.emit('admin_get_status');
+        if (!gameState.isAdmin) {
+            clearInterval(adminTimerInterval);
+            adminTimerInterval = null;
+            return;
+        }
+        
+        const timeEl = document.getElementById('admin-time-remaining');
+        if (!timeEl) return;
+        
+        let timeRemaining = null;
+        
+        // Calculate based on round end time (during gameplay)
+        if (gameState.roundEndTime) {
+            const now = Date.now() / 1000;
+            timeRemaining = Math.max(0, gameState.roundEndTime - now);
+        }
+        // Calculate based on voting start time (during voting)
+        else if (gameState.votingStartTime && gameState.votingDuration) {
+            const now = Date.now() / 1000;
+            const elapsed = now - gameState.votingStartTime;
+            timeRemaining = Math.max(0, gameState.votingDuration - elapsed);
+        }
+        
+        if (timeRemaining !== null) {
+            const minutes = Math.floor(timeRemaining / 60);
+            const seconds = Math.floor(timeRemaining % 60);
+            timeEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+        } else {
+            timeEl.textContent = '-';
         }
     }, 1000);
 }
@@ -491,6 +538,66 @@ socket.on('player_prompt_updated', (data) => {
                             promptsElement.textContent = `Prompts: ${data.prompts_submitted}`;
                             promptsElement.style.display = 'block';
                             infoDiv.appendChild(promptsElement);
+                        }
+                    }
+                }
+            });
+        }
+    }
+});
+
+socket.on('player_selected_image', (data) => {
+    // Update admin dashboard when a player selects an image
+    if (gameState.isAdmin) {
+        const adminPlayerList = document.getElementById('admin-player-list');
+        if (adminPlayerList) {
+            const items = adminPlayerList.querySelectorAll('.admin-player-item');
+            items.forEach(item => {
+                const nameElement = item.querySelector('strong');
+                if (nameElement && nameElement.textContent === data.player_name) {
+                    // Update selection status
+                    const selectionStatus = item.querySelector('.selection-status');
+                    if (selectionStatus) {
+                        selectionStatus.textContent = '✓ Selected';
+                    } else {
+                        // Add selection status if it doesn't exist
+                        const infoDiv = item.querySelector('div');
+                        if (infoDiv) {
+                            const selectionElement = document.createElement('small');
+                            selectionElement.className = 'selection-status';
+                            selectionElement.textContent = '✓ Selected';
+                            selectionElement.style.cssText = 'display: block; color: #4caf50;';
+                            infoDiv.appendChild(selectionElement);
+                        }
+                    }
+                }
+            });
+        }
+    }
+});
+
+socket.on('player_voted', (data) => {
+    // Update admin dashboard when a player votes
+    if (gameState.isAdmin) {
+        const adminPlayerList = document.getElementById('admin-player-list');
+        if (adminPlayerList) {
+            const items = adminPlayerList.querySelectorAll('.admin-player-item');
+            items.forEach(item => {
+                const nameElement = item.querySelector('strong');
+                if (nameElement && nameElement.textContent === data.player_name) {
+                    // Update vote status
+                    const voteStatus = item.querySelector('.vote-status');
+                    if (voteStatus) {
+                        voteStatus.textContent = '✓ Voted';
+                    } else {
+                        // Add vote status if it doesn't exist
+                        const infoDiv = item.querySelector('div');
+                        if (infoDiv) {
+                            const voteElement = document.createElement('small');
+                            voteElement.className = 'vote-status';
+                            voteElement.textContent = '✓ Voted';
+                            voteElement.style.cssText = 'display: block; color: #4caf50;';
+                            infoDiv.appendChild(voteElement);
                         }
                     }
                 }
@@ -553,8 +660,8 @@ function updateAdminPlayerList(players) {
             const teamSelect = document.createElement('select');
             teamSelect.className = 'team-select';
             teamSelect.style.cssText = 'padding: 2px 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;';
-            teamSelect.value = player.team || '';
             
+            // Add options first
             const optionNone = document.createElement('option');
             optionNone.value = '';
             optionNone.textContent = 'No Team';
@@ -569,6 +676,12 @@ function updateAdminPlayerList(players) {
             optionOrange.value = 'Orange';
             optionOrange.textContent = 'Orange';
             teamSelect.appendChild(optionOrange);
+            
+            // Set value AFTER options are added to ensure it works correctly
+            // Handle null/undefined team values - explicitly convert to empty string for "No Team"
+            const teamValue = (player.team && (player.team === 'Green' || player.team === 'Orange')) ? player.team : '';
+            console.log(`Setting dropdown for ${player.name}: team="${player.team}" -> value="${teamValue}"`);
+            teamSelect.value = teamValue;
             
             // Handle team change
             teamSelect.addEventListener('change', (e) => {
@@ -653,6 +766,7 @@ document.getElementById('admin-next-round-btn')?.addEventListener('click', () =>
 });
 
 socket.on('lobby_players_update', (data) => {
+    console.log('lobby_players_update received:', data.players?.length || 0, 'players');
     updatePlayerList(data.players);
 });
 
@@ -1114,7 +1228,9 @@ socket.on('image_generated', (data) => {
     
     if (imageContainers.length > 0) {
         const lastContainer = imageContainers[imageContainers.length - 1];
-        lastContainer.innerHTML = `<img src="${data.image_data}" alt="Generated image" class="image-result">`;
+        // Prefer image_url over image_data to reduce memory usage
+        const imageSrc = data.image_url || data.image_data || '';
+        lastContainer.innerHTML = `<img src="${imageSrc}" alt="Generated image" class="image-result">`;
     }
     
     // Note: Error messages are handled separately via 'image_generation_error' event
@@ -1166,8 +1282,10 @@ function addImageToSelectionGallery(imgData, index) {
     
         const item = document.createElement('div');
         item.className = 'selection-item';
+        // Prefer image_url over image_data to reduce memory usage
+        const imageSrc = imgData.image_url || imgData.image_data || '';
         item.innerHTML = `
-            <img src="${imgData.image_data}" alt="Generated image">
+            <img src="${imageSrc}" alt="Generated image">
         `;
 
         item.addEventListener('click', () => {
@@ -1189,6 +1307,45 @@ function addImageToSelectionGallery(imgData, index) {
 
         gallery.appendChild(item);
 }
+
+socket.on('image_url_updated', (data) => {
+    // Update image URL in client-side array when upload completes
+    // This allows selection screen to use URLs instead of base64
+    if (data.prompt_id && data.image_url) {
+        const imageIndex = gameState.generatedImages.findIndex(img => img.prompt_id === data.prompt_id);
+        if (imageIndex !== -1) {
+            gameState.generatedImages[imageIndex].image_url = data.image_url;
+            // Optionally clear base64 from client-side array to free memory
+            if (gameState.generatedImages[imageIndex].image_data) {
+                delete gameState.generatedImages[imageIndex].image_data;
+            }
+            
+            // Update the image in the selection gallery if it exists
+            const gallery = document.getElementById('selection-gallery');
+            if (gallery) {
+                const items = gallery.querySelectorAll('.selection-item');
+                if (items[imageIndex]) {
+                    const img = items[imageIndex].querySelector('img');
+                    if (img) {
+                        img.src = data.image_url;
+                    }
+                }
+            }
+            
+            // Update the image in the conversation area if it exists
+            const conversationArea = document.getElementById('conversation-area');
+            if (conversationArea) {
+                const imageContainers = conversationArea.querySelectorAll('.image-container');
+                if (imageContainers[imageIndex]) {
+                    const img = imageContainers[imageIndex].querySelector('img');
+                    if (img) {
+                        img.src = data.image_url;
+                    }
+                }
+            }
+        }
+    }
+});
 
 socket.on('voting_started', (data) => {
     console.log('[CLIENT] voting_started event received:', data);
@@ -1771,6 +1928,15 @@ socket.on('return_to_lobby', (data) => {
     gameState.votedFor = null;
     gameState.tempVoteSelection = null;
     gameState.currentRound = 0;
+    
+    // Clear time calculation timers
+    if (adminTimerInterval) {
+        clearInterval(adminTimerInterval);
+        adminTimerInterval = null;
+    }
+    gameState.roundEndTime = null;
+    gameState.votingStartTime = null;
+    gameState.votingDuration = null;
     
     // Reset avatar state
     stopCharacterTalking();
