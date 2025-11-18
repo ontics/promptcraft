@@ -325,7 +325,7 @@ def handle_join_game(data):
         
         # Send reconnection update to admin
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
-            emit('player_status_update', {
+            socketio.emit('player_status_update', {
                 'players': [{
                     'name': p.get('display_name', p['name']),
                     'team': p['team'],
@@ -340,7 +340,7 @@ def handle_join_game(data):
             if player['is_admin']:
                 # Admin reconnection - send admin view
                 if game_state['status'] == 'playing':
-                    emit('admin_game_started', {
+                    socketio.emit('admin_game_started', {
                         'round': game_state['current_round'],
                         'target': game_state['current_target'],
                         'players': [{
@@ -374,7 +374,7 @@ def handle_join_game(data):
                         character_data['animation_state'] = get_spud_animation_state(prompt_count, plant_state, is_error=False, has_successful_prompt=has_successful_prompt)
                         character_data['prompt_count'] = prompt_count
                     
-                    emit('game_started', {
+                    socketio.emit('game_started', {
                         'round': current_round,
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
@@ -383,7 +383,7 @@ def handle_join_game(data):
                     # Restore their generated images
                     if player['images'].get(current_round):
                         for img_data in player['images'][current_round]:
-                            emit('image_generated', {
+                            socketio.emit('image_generated', {
                                 'image_data': img_data.get('image_data', ''),
                                 'ai_response': img_data.get('ai_response', ''),
                                 'prompt': img_data.get('prompt', ''),
@@ -400,7 +400,7 @@ def handle_join_game(data):
                         for img_data in player['images'][current_round]:
                             # Only restore images that have valid data (not just placeholders)
                             if img_data.get('image_data') or img_data.get('prompt_id'):
-                                emit('image_generated', {
+                                socketio.emit('image_generated', {
                                     'image_data': img_data.get('image_data', ''),
                                     'ai_response': img_data.get('ai_response', ''),
                                     'prompt': img_data.get('prompt', ''),
@@ -416,7 +416,7 @@ def handle_join_game(data):
                     if game_state['status'] == 'voting':
                         # Include synchronized start time for timer synchronization
                         selection_start_time = game_state.get('voting_start_time', time.time())
-                        emit('voting_started', {
+                        socketio.emit('voting_started', {
                             'round': current_round,
                             'duration': game_state.get('voting_duration', 30),
                             'start_time': selection_start_time,  # Synchronized start time
@@ -517,11 +517,12 @@ def handle_join_game(data):
         
         # Send lobby update if in lobby, otherwise skip (already sent game state above)
         if game_state['status'] == 'lobby':
+            lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
             if player['is_admin']:
-                emit('admin_joined', {
+                socketio.emit('admin_joined', {
                     'is_admin': True,
                     'players': [{
-                        'name': p['name'],
+                        'name': p.get('display_name', p['name']),  # Use display_name consistently
                         'team': p['team'],
                         'is_admin': p['is_admin'],
                         'is_connected': p.get('socket_id') is not None,
@@ -529,8 +530,7 @@ def handle_join_game(data):
                     } for p in players.values()]
                 }, room=player['socket_id'])
             else:
-                lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
-                emit('game_joined', {
+                socketio.emit('game_joined', {
                     'player': {
                         'name': player.get('display_name', player['name']),
                         'team': player['team'],
@@ -546,7 +546,7 @@ def handle_join_game(data):
                     },
                     'lobby_players': lobby_players
                 }, room=player['socket_id'])
-            emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+            socketio.emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
         
         print(f"Player {player.get('display_name', player_name)} reconnected (Admin: {player['is_admin']})")
         return
@@ -641,7 +641,7 @@ def handle_join_game(data):
     # Send game state to player
     # Admin gets different view - they don't play
     if player['is_admin']:
-        emit('admin_joined', {
+        socketio.emit('admin_joined', {
             'is_admin': True,
             'players': [{
                 'name': p.get('display_name', p['name']),  # Use display_name
@@ -652,7 +652,7 @@ def handle_join_game(data):
             } for p in players.values()]
         }, room=player['socket_id'])
     else:
-        emit('game_joined', {
+        socketio.emit('game_joined', {
             'player': {
                 'name': player.get('display_name', player['name']),  # Use display_name
                 'team': player['team'],
@@ -669,12 +669,13 @@ def handle_join_game(data):
             'lobby_players': lobby_players
         }, room=player['socket_id'])
 
-    # Broadcast player list update to all
-    emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
+    # Broadcast player list update to all (only if in lobby)
+    if game_state['status'] == 'lobby' and 'lobby_players' in locals() and lobby_players is not None:
+        socketio.emit('lobby_players_update', {'players': lobby_players}, broadcast=True)
 
     # Also push an admin-specific player status update so the dashboard stays in sync
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('player_status_update', {
+        socketio.emit('player_status_update', {
             'players': [{
                 'name': p.get('display_name', p['name']),
                 'team': p['team'],
@@ -860,7 +861,7 @@ def handle_start_game():
                     if welcome_message:
                         character_data['message'] = welcome_message
 
-                    emit('game_started', {
+                    socketio.emit('game_started', {
                         'round': 1,
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
@@ -1103,10 +1104,10 @@ def handle_send_prompt(data):
                     character_data['prompt_count'] = prompt_count
                 
                 # Emit character error message (appears as speech bubble from avatar)
-                emit('character_message', character_data, room=player['socket_id'])
+                socketio.emit('character_message', character_data, room=player['socket_id'])
                 
                 # Also emit error for logging/analytics (but character message is primary UI)
-                emit('image_generation_error', {
+                socketio.emit('image_generation_error', {
                     'message': character_error_message,
                     'error_type': error_type,
                     'suggest_retry': True
@@ -1147,7 +1148,7 @@ def handle_send_prompt(data):
                         'prompt_count': prompt_count
                     }
                     # Emit update to reflect state change (e.g., base -> yellow after first success)
-                    emit('character_message', character_update, room=player['socket_id'])
+                    socketio.emit('character_message', character_update, room=player['socket_id'])
             
         except Exception as img_error:
             print(f"Image generation error: {img_error}")
@@ -1195,10 +1196,10 @@ def handle_send_prompt(data):
                 character_data['prompt_count'] = prompt_count
             
             # Emit character error message (appears as speech bubble from avatar)
-            emit('character_message', character_data, room=player['socket_id'])
+            socketio.emit('character_message', character_data, room=player['socket_id'])
             
             # Also emit error for logging/analytics
-            emit('image_generation_error', {
+            socketio.emit('image_generation_error', {
                 'message': character_error_message,
                 'error_type': error_type,
                 'suggest_retry': True
@@ -1338,10 +1339,10 @@ def handle_send_prompt(data):
             character_data['prompt_count'] = prompt_count
         
         # Emit character error message (appears as speech bubble from avatar)
-        emit('character_message', character_data, room=player['socket_id'])
+        socketio.emit('character_message', character_data, room=player['socket_id'])
         
         # Also emit error for logging/analytics
-        emit('image_generation_error', {
+        socketio.emit('image_generation_error', {
             'message': character_error_message,
             'error_type': error_type,
             'suggest_retry': True
@@ -1863,7 +1864,7 @@ def check_all_selected():
     if time_elapsed < duration:
         waiting_count = len([p for p in active_players if not p.get('has_confirmed_selection', {}).get(current_round, False)])
         if waiting_count > 0:
-            emit('selection_waiting', {'waiting_count': waiting_count, 'total_players': len(active_players)}, broadcast=True)
+            socketio.emit('selection_waiting', {'waiting_count': waiting_count, 'total_players': len(active_players)}, broadcast=True)
 
     # Advance to voting if all selected OR time has elapsed
     if all_selected or (time_elapsed >= duration):
@@ -1909,7 +1910,6 @@ def start_voting_on_images():
                         elif img.get('prompt_id') == selected_prompt_id and img.get('image_url') and 'image_data' in img:
                             del img['image_data']
         print(f"[MEMORY] Cleared remaining image_data from current round when voting started")
-        gc.collect()
 
         # Gather all selected images with prompt_id (exclude admin)
         # Use image_url instead of base64 to reduce memory usage
@@ -2170,24 +2170,8 @@ def handle_next_round():
                 p['has_successful_prompt'][round_num] = False  # Reset successful prompt tracking
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round {round_num}")
                 
-                # Clear old round data (memory optimization)
-                for prev_round in [1, 2, 3]:
-                    if prev_round < round_num:
-                        # Force clear image_data from all images in completed rounds (even without URL)
-                        if prev_round in p['images']:
-                            for img in p['images'][prev_round]:
-                                if 'image_data' in img:
-                                    del img['image_data']  # Force clear, even if URL not ready
-                        # Also clear image_data from selected_images for completed rounds
-                        if prev_round in p['selected_images']:
-                            selected = p['selected_images'][prev_round]
-                            if 'image_data' in selected:
-                                del selected['image_data']  # Force clear
-        print(f"[MEMORY] Force cleared image_data from completed rounds (rounds < {round_num})")
-        
-        # Force garbage collection after clearing old round data
-        gc.collect()
-        print(f"[MEMORY] Garbage collection completed after next round start")
+                # Note: Memory clearing for completed rounds is already done in show_round_results()
+                # No need to clear again here to avoid redundant operations
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
         for p in players.values():
@@ -2212,7 +2196,7 @@ def handle_next_round():
                     if welcome_message:
                         character_data['message'] = welcome_message
 
-                    emit('game_started', {
+                    socketio.emit('game_started', {
                         'round': game_state['current_round'],
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
