@@ -1627,6 +1627,20 @@ def handle_round_timer_check():
                 start_voting_phase()
         # Note: We don't need a separate max_duration check here because 
         # elapsed >= min_duration will be true for all values >= 5 seconds
+    elif game_state['status'] == 'voting':
+        # Periodically check selection status during voting phase
+        # This ensures auto-selection works for bots and handles cases where
+        # real players' client-side timers don't fire (network issues, etc.)
+        # Check every 5 seconds to avoid excessive calls while still being responsive
+        time_elapsed = time.time() - game_state.get('voting_start_time', time.time())
+        duration = game_state.get('voting_duration', 30)
+        
+        # Only check if we're close to or past the duration (check every 5 seconds near the end)
+        # This prevents excessive checking while still catching timer expiration
+        if time_elapsed >= (duration - 5) or time_elapsed >= duration:
+            # Call check_all_selected which will auto-select for players who haven't confirmed
+            # and advance to voting screen if all are ready or time has elapsed
+            check_all_selected()
 
 def start_transition_to_selection():
     """Show transition screen, then move to selection after 5-10 seconds"""
@@ -1953,6 +1967,43 @@ def start_voting_on_images():
         # Log current state for debugging
         connected_players = [p for p in players.values() if not p.get('is_admin') and p.get('socket_id')]
         print(f"[VOTING] Starting voting phase: round={current_round}, connected_players={len(connected_players)}, total_players={len([p for p in players.values() if not p.get('is_admin')])}")
+        
+        # CRITICAL: Auto-select for any players who haven't selected yet
+        # This ensures all players have selections even if timer didn't fire or admin skipped
+        non_admin_players = [p for p in players.values() if not p.get('is_admin')]
+        active_players = [p for p in non_admin_players if p.get('socket_id') is not None]
+        
+        auto_selected_count = 0
+        for player in active_players:
+            if current_round not in player['selected_images'] and player['images'].get(current_round):
+                # Find the last valid (non-error) image with a valid prompt_id
+                valid_images = [img for img in player['images'][current_round] 
+                              if not img.get('error_type') and img.get('prompt_id') is not None]
+                if valid_images:
+                    last_valid_image = valid_images[-1]
+                    player['selected_images'][current_round] = last_valid_image
+                    player['has_confirmed_selection'][current_round] = True
+                    
+                    # Save to database
+                    if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+                        prompt_id = last_valid_image.get('prompt_id')
+                        db.save_image_selection(
+                            player_id=player['session_id'],
+                            round_id=game_state['round_id'],
+                            game_id=game_state['game_id'],
+                            prompt_id=prompt_id
+                        )
+                        print(f"[VOTING] Auto-selected valid image (prompt_id={prompt_id}) for player {player['name']} before voting")
+                        auto_selected_count += 1
+                    else:
+                        print(f"[VOTING] Auto-selected valid image for player {player['name']} before voting (database save skipped - not configured)")
+                        auto_selected_count += 1
+                else:
+                    # No valid images available - log error
+                    print(f"❌ ERROR: Player {player['name']} has no valid images to auto-select in round {current_round}. Total images: {len(player['images'][current_round])}")
+        
+        if auto_selected_count > 0:
+            print(f"[VOTING] Auto-selected images for {auto_selected_count} player(s) before starting voting phase")
         
         # Additional memory clearing when voting starts (clear any remaining base64)
         # Most should already be cleared during transition, but clear any stragglers
@@ -2357,7 +2408,28 @@ def handle_skip_voting():
     # Only allow skipping if we're in voting phase
     if game_state['status'] in ['voting', 'voting_images']:
         if game_state['status'] == 'voting':
-            # Still in selection phase - move to image voting
+            # Still in selection phase - auto-select for any players who haven't selected, then move to image voting
+            # start_voting_on_images() will handle auto-selection, but we ensure it's done
+            current_round = game_state['current_round']
+            non_admin_players = [p for p in players.values() if not p.get('is_admin')]
+            active_players = [p for p in non_admin_players if p.get('socket_id') is not None]
+            
+            for player in active_players:
+                if current_round not in player['selected_images'] and player['images'].get(current_round):
+                    valid_images = [img for img in player['images'][current_round] 
+                                  if not img.get('error_type') and img.get('prompt_id') is not None]
+                    if valid_images:
+                        last_valid_image = valid_images[-1]
+                        player['selected_images'][current_round] = last_valid_image
+                        player['has_confirmed_selection'][current_round] = True
+                        if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+                            db.save_image_selection(
+                                player_id=player['session_id'],
+                                round_id=game_state['round_id'],
+                                game_id=game_state['game_id'],
+                                prompt_id=last_valid_image.get('prompt_id')
+                            )
+            
             start_voting_on_images()
         else:
             # In image voting phase - skip to results
@@ -2778,6 +2850,28 @@ def skip_selection():
     """Console command: Skip selection screen and go to voting screen"""
     if game_state['status'] == 'voting':
         print("[CONSOLE] Skipping selection screen, advancing to voting on images")
+        # Auto-select for any players who haven't selected before advancing
+        # start_voting_on_images() will handle this, but we ensure it's done
+        current_round = game_state['current_round']
+        non_admin_players = [p for p in players.values() if not p.get('is_admin')]
+        active_players = [p for p in non_admin_players if p.get('socket_id') is not None]
+        
+        for player in active_players:
+            if current_round not in player['selected_images'] and player['images'].get(current_round):
+                valid_images = [img for img in player['images'][current_round] 
+                              if not img.get('error_type') and img.get('prompt_id') is not None]
+                if valid_images:
+                    last_valid_image = valid_images[-1]
+                    player['selected_images'][current_round] = last_valid_image
+                    player['has_confirmed_selection'][current_round] = True
+                    if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+                        db.save_image_selection(
+                            player_id=player['session_id'],
+                            round_id=game_state['round_id'],
+                            game_id=game_state['game_id'],
+                            prompt_id=last_valid_image.get('prompt_id')
+                        )
+        
         start_voting_on_images()
         return True
     else:

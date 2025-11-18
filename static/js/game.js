@@ -1475,15 +1475,22 @@ function startSelectionTimer(duration, startTime) {
             clearInterval(timerEl.timerInterval);
             timerEl.textContent = '0';
             
-            // If no selection made, auto-select last valid image and notify server
-            if (gameState.selectedImageIndex === null && gameState.generatedImages.length > 0) {
+            // If selection not confirmed, auto-select and notify server
+            // Check hasConfirmedSelection instead of selectedImageIndex to handle case where
+            // player clicked an image but didn't press "Confirm Selection"
+            if (!gameState.hasConfirmedSelection && gameState.generatedImages.length > 0) {
                 const defaultNotice = document.getElementById('default-selection-notice');
                 if (defaultNotice) {
                     defaultNotice.style.display = 'block';
                 }
                 
-                // Find the last valid (non-error) image
+                // Determine which image to select:
+                // 1. If player clicked an image (selectedImageIndex is set), use that if it's valid
+                // 2. Otherwise, use the last valid (non-error) image
+                let effectiveIndex;
                 let lastValidIndex = -1;
+                
+                // Find the last valid (non-error) image
                 for (let i = gameState.generatedImages.length - 1; i >= 0; i--) {
                     if (!gameState.generatedImages[i].error_type) {
                         lastValidIndex = i;
@@ -1491,35 +1498,66 @@ function startSelectionTimer(duration, startTime) {
                     }
                 }
                 
-                // Auto-select last valid image (or last image if somehow all are errors)
-                let effectiveIndex;
-                if (lastValidIndex >= 0) {
-                    gameState.selectedImageIndex = lastValidIndex;
+                // Check if player's clicked image is valid
+                if (gameState.selectedImageIndex !== null) {
+                    const clickedImage = gameState.generatedImages[gameState.selectedImageIndex];
+                    // Use clicked image if it's valid (no error_type)
+                    if (clickedImage && !clickedImage.error_type) {
+                        effectiveIndex = gameState.selectedImageIndex;
+                    } else if (lastValidIndex >= 0) {
+                        // Clicked image has error, use last valid instead
+                        effectiveIndex = lastValidIndex;
+                        gameState.selectedImageIndex = lastValidIndex;
+                    } else {
+                        // Fallback: use clicked image even if it has an error (shouldn't happen)
+                        effectiveIndex = gameState.selectedImageIndex;
+                    }
+                } else if (lastValidIndex >= 0) {
+                    // No image clicked, use last valid image
                     effectiveIndex = lastValidIndex;
+                    gameState.selectedImageIndex = lastValidIndex;
                 } else {
                     // Fallback: use last image even if it has an error (shouldn't happen)
                     effectiveIndex = gameState.generatedImages.length - 1;
                     gameState.selectedImageIndex = effectiveIndex;
                 }
                 
-                // Visual feedback - select the last valid image in the gallery
-                // Since we're always selecting the last valid image, it will be the last item in the gallery
+                // Visual feedback - select the chosen image in the gallery
                 const gallery = document.getElementById('selection-gallery');
                 if (gallery) {
                     const items = gallery.querySelectorAll('.selection-item');
                     if (items.length > 0) {
                         items.forEach(i => i.classList.remove('selected'));
-                        items[items.length - 1].classList.add('selected');
+                        // Find the item corresponding to effectiveIndex in the gallery
+                        // Gallery only contains valid images, so we need to map the index
+                        let galleryIndex = 0;
+                        for (let i = 0; i <= effectiveIndex && i < gameState.generatedImages.length; i++) {
+                            if (!gameState.generatedImages[i].error_type) {
+                                if (i === effectiveIndex) {
+                                    items[galleryIndex]?.classList.add('selected');
+                                    break;
+                                }
+                                galleryIndex++;
+                            }
+                        }
+                        // Fallback: select last item if mapping failed
+                        if (galleryIndex >= items.length) {
+                            items[items.length - 1]?.classList.add('selected');
+                        }
                     }
                 }
                 
                 // Notify server of auto-selection (send prompt_id to avoid index mismatch)
                 const autoSelectedImage = gameState.generatedImages[effectiveIndex];
-                socket.emit('select_image', { 
-                    prompt_id: autoSelectedImage.prompt_id,
-                    image_index: effectiveIndex  // Keep for backward compatibility
-                });
-                console.log('[CLIENT] Timer expired - auto-selected last valid image');
+                if (autoSelectedImage && autoSelectedImage.prompt_id) {
+                    socket.emit('select_image', { 
+                        prompt_id: autoSelectedImage.prompt_id,
+                        image_index: effectiveIndex  // Keep for backward compatibility
+                    });
+                    console.log('[CLIENT] Timer expired - auto-selected image (clicked or last valid)');
+                } else {
+                    console.error('[CLIENT] Timer expired but cannot auto-select - no valid image with prompt_id');
+                }
             }
             
             // Request server to check if all players are ready (will advance to voting)
