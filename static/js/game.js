@@ -24,7 +24,8 @@ let gameState = {
     // Admin time calculation (client-side)
     roundEndTime: null,  // Unix timestamp for round end
     votingStartTime: null,  // Unix timestamp for voting start
-    votingDuration: null  // Duration in seconds
+    votingDuration: null,  // Duration in seconds
+    inSelectionPhase: false  // Track if we're in the selection phase (for late-arriving images)
 };
 
 // DOM elements
@@ -851,6 +852,9 @@ socket.on('game_started', (data) => {
         return;
     }
     
+    // Reset selection phase flag for new round
+    gameState.inSelectionPhase = false;
+    
     gameState.currentRound = data.round;
     gameState.generatedImages = [];
     gameState.selectedImageIndex = null;
@@ -1240,20 +1244,28 @@ socket.on('image_generated', (data) => {
     conversationArea.scrollTop = conversationArea.scrollHeight;
     }
     
-    // If we're in selection screen, add this image to the gallery
+    // If we're in selection phase (either selection screen is active OR we've received voting_started),
+    // add this image to the gallery. This ensures late-arriving images appear even if they arrive
+    // during transition or after voting_started has populated the gallery.
     const selectionScreen = document.getElementById('selection-screen');
-    if (selectionScreen && selectionScreen.classList.contains('active')) {
+    const isSelectionScreenActive = selectionScreen && selectionScreen.classList.contains('active');
+    
+    if (gameState.inSelectionPhase || isSelectionScreenActive) {
         // Only add valid (non-error) images to selection gallery
         const validImageIndex = gameState.generatedImages.length - 1;
-        addImageToSelectionGallery(data, validImageIndex);
+        
+        // Add to gallery if selection screen exists (might be in transition)
+        if (selectionScreen) {
+            addImageToSelectionGallery(data, validImageIndex);
+        }
         
         // If the player hasn't confirmed a selection yet, shift default to the newest valid image
-        if (!gameState.hasConfirmedSelection) {
+        if (!gameState.hasConfirmedSelection && isSelectionScreenActive) {
             gameState.selectedImageIndex = validImageIndex;
 
             // Visual feedback - move the green border to the newest image in the gallery
             // The gallery only contains valid images, so we need to find the last item
-    const gallery = document.getElementById('selection-gallery');
+            const gallery = document.getElementById('selection-gallery');
             if (gallery) {
                 const items = gallery.querySelectorAll('.selection-item');
                 if (items.length > 0) {
@@ -1276,16 +1288,38 @@ function addImageToSelectionGallery(imgData, index) {
     const gallery = document.getElementById('selection-gallery');
     if (!gallery) return;
     
-    // Check if image already exists in gallery
+    // Check if image already exists in gallery by prompt_id (more reliable than index)
+    // If no prompt_id, check by comparing with existing items
     const existingItems = gallery.querySelectorAll('.selection-item');
-    if (existingItems.length > index) return; // Already added
+    if (imgData.prompt_id) {
+        // Check if an item with this prompt_id already exists
+        for (let i = 0; i < existingItems.length; i++) {
+            const item = existingItems[i];
+            const itemImg = item.querySelector('img');
+            if (itemImg && itemImg.dataset.promptId === imgData.prompt_id) {
+                return; // Already added
+            }
+        }
+    } else {
+        // Fallback: check if we've already added this many items (less reliable but works for backward compatibility)
+        // Count valid images up to this index to see if gallery should already have this item
+        let validImageCount = 0;
+        for (let i = 0; i < index && i < gameState.generatedImages.length; i++) {
+            if (!gameState.generatedImages[i].error_type) {
+                validImageCount++;
+            }
+        }
+        if (existingItems.length > validImageCount) {
+            return; // Already added (or more items exist than expected)
+        }
+    }
     
         const item = document.createElement('div');
         item.className = 'selection-item';
         // Prefer image_url over image_data to reduce memory usage
         const imageSrc = imgData.image_url || imgData.image_data || '';
         item.innerHTML = `
-            <img src="${imageSrc}" alt="Generated image">
+            <img src="${imageSrc}" alt="Generated image" ${imgData.prompt_id ? `data-prompt-id="${imgData.prompt_id}"` : ''}>
         `;
 
         item.addEventListener('click', () => {
@@ -1357,6 +1391,10 @@ socket.on('voting_started', (data) => {
     }
     
     console.log('[CLIENT] Showing selection screen');
+    
+    // Mark that we're in selection phase (for late-arriving images)
+    gameState.inSelectionPhase = true;
+    
     showScreen('selection');
     
     // Reset confirmation state at the start of selection
@@ -1961,6 +1999,7 @@ socket.on('return_to_lobby', (data) => {
     // Return to lobby screen
     showScreen('lobby');
     // Reset game state
+    gameState.inSelectionPhase = false;
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;

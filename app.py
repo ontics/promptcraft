@@ -520,7 +520,7 @@ def handle_join_game(data):
                                 'total_score': p['score'],
                                 'image': image_display
                             })
-                    results.sort(key=lambda x: x['total_score'], reverse=True)
+                    results.sort(key=lambda x: x['votes'], reverse=True)
                     socketio.emit('round_results', {
                         'round': current_round,
                         'results': results
@@ -1041,8 +1041,12 @@ def handle_send_prompt(data):
             )
             
             # Validate game state and player still exist (in case game was restarted during API call)
-            if game_state['status'] != 'playing':
-                print(f"[WARNING] API response received but game is no longer in 'playing' state (status: {game_state['status']}). Discarding response.")
+            # Allow processing during 'playing', 'transitioning', and 'voting' states since:
+            # - Prompt was submitted during valid 'playing' state (or buffer period)
+            # - Image should still be included in selection gallery even if it arrives late
+            # - We're still in the same round (not a new round or game restart)
+            if game_state['status'] not in ['playing', 'transitioning', 'voting']:
+                print(f"[WARNING] API response received but game is in invalid state (status: {game_state['status']}). Discarding response.")
                 return
             
             if session_id not in players:
@@ -2193,8 +2197,8 @@ def show_round_results():
                 'image': image_display
             })
 
-    # Sort by total score for overall leaderboard
-    results.sort(key=lambda x: x['total_score'], reverse=True)
+    # Sort by votes received in this round (not total score)
+    results.sort(key=lambda x: x['votes'], reverse=True)
     
     # Clear old round data after round completes (memory optimization)
     # Force clear image_data from completed rounds, even if image_url doesn't exist yet
