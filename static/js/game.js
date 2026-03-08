@@ -883,10 +883,10 @@ socket.on('game_started', (data) => {
         updateAvatarState(data.character);
         
         // Display welcome message if present (lasts 20 seconds or until first prompt)
-        if (data.character.message) {
-            const messageBubble = document.getElementById('character-bubble');
-            const messageText = document.getElementById('character-bubble-text');
-            
+        // (Only when character bubble/avatar exist on prompting screen; omitted when Bud/Spud removed below target)
+        const welcomeBubble = document.getElementById('character-bubble');
+        const welcomeText = document.getElementById('character-bubble-text');
+        if (data.character.message && welcomeBubble && welcomeText) {
             // Clear any existing message auto-hide timer
             if (gameState.messageAutoHideTimer) {
                 clearTimeout(gameState.messageAutoHideTimer);
@@ -894,23 +894,23 @@ socket.on('game_started', (data) => {
             }
             
             // Display the welcome message
-            messageText.textContent = data.character.message;
-            messageBubble.style.display = 'block';
+            welcomeText.textContent = data.character.message;
+            welcomeBubble.style.display = 'block';
             
             // Style based on character
             if (data.character.character === 'Spud') {
-                messageBubble.style.background = '#ffe8e8';
-                messageBubble.style.borderLeft = '4px solid #ff6b6b';
-                messageBubble.style.setProperty('--bubble-color', '#ffe8e8');
+                welcomeBubble.style.background = '#ffe8e8';
+                welcomeBubble.style.borderLeft = '4px solid #ff6b6b';
+                welcomeBubble.style.setProperty('--bubble-color', '#ffe8e8');
             } else {
-                messageBubble.style.background = '#fff3bf';
-                messageBubble.style.borderLeft = '4px solid #fab005';
-                messageBubble.style.setProperty('--bubble-color', '#fff3bf');
+                welcomeBubble.style.background = '#fff3bf';
+                welcomeBubble.style.borderLeft = '4px solid #fab005';
+                welcomeBubble.style.setProperty('--bubble-color', '#fff3bf');
             }
             
             // Auto-hide message after 20 seconds
             gameState.messageAutoHideTimer = setTimeout(() => {
-                messageBubble.style.display = 'none';
+                welcomeBubble.style.display = 'none';
                 stopCharacterTalking();
                 // Return to static animation state (no message)
                 updateAvatarState({
@@ -1113,17 +1113,18 @@ function updateAvatarState(characterData) {
 }
 
 socket.on('character_message', (data) => {
+    // Update avatar state (no-ops when character DOM elements removed from prompting screen)
+    updateAvatarState(data);
+
     const messageBubble = document.getElementById('character-bubble');
     const messageText = document.getElementById('character-bubble-text');
+    if (!messageBubble || !messageText) return;
 
     // Clear any existing message auto-hide timer
     if (gameState.messageAutoHideTimer) {
         clearTimeout(gameState.messageAutoHideTimer);
         gameState.messageAutoHideTimer = null;
     }
-
-    // Update avatar state
-    updateAvatarState(data);
 
     // Update message bubble (messages stay until replaced or 20 seconds pass)
     if (data.message) {
