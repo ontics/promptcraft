@@ -293,15 +293,6 @@ document.getElementById('back-to-home-btn')?.addEventListener('click', () => {
     }
 });
 
-// Admin login via lobby footer link
-document.getElementById('admin-login-link')?.addEventListener('click', () => {
-    const code = window.prompt('Enter admin password:');
-    if (!code) {
-        return;
-    }
-    socket.emit('admin_login', { code });
-});
-
 // Socket event handlers
 socket.on('connect', () => {
     console.log('Connected to server');
