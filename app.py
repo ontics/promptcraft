@@ -706,94 +706,6 @@ def handle_join_game(data):
         print(f"[LOBBY] Broadcasting lobby_players_update to all clients: {len(lobby_players)} players")
         socketio.emit('lobby_players_update', {'players': lobby_players})
 
-
-@socketio.on('admin_login')
-def handle_admin_login(data):
-    """Allow a user to become admin by entering the admin code (and join lobby as Gamemaster if needed)."""
-    global admin_session_id
-
-    session_id = session.get('session_id')
-    if not session_id:
-        emit('error', {'message': 'Session not initialized. Please refresh and try again.'})
-        return
-
-    required_admin_code = os.getenv('ADMIN_CODE', '').strip()
-    entered_code = (data or {}).get('code', '').strip()
-
-    if not required_admin_code:
-        emit('error', {'message': 'Admin password is not configured for this game.'})
-        return
-
-    # Only allow admin login from lobby
-    if game_state['status'] != 'lobby':
-        emit('error', {'message': 'Admin login is only available in the lobby.'})
-        return
-
-    # If an admin already exists and is connected, do not allow another admin to log in
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('error', {'message': 'An admin is already active in this game.'})
-        return
-
-    if entered_code != required_admin_code:
-        emit('error', {'message': 'Incorrect admin password.'})
-        return
-
-    # Ensure this session has a player in the lobby; create one if needed
-    player = players.get(session_id)
-    if not player:
-        player = {
-            'session_id': session_id,
-            'socket_id': request.sid,
-            'name': required_admin_code,  # Internal name (code)
-            'display_name': 'Gamemaster',
-            'team': None,
-            'character': None,
-            'score': 0,
-            'round_scores': [0, 0, 0],
-            'images': {1: [], 2: [], 3: []},
-            'selected_images': {},
-            'has_confirmed_selection': {1: False, 2: False, 3: False},
-            'votes_received': {1: 0, 2: 0, 3: 0},
-            'has_voted': {1: False, 2: False, 3: False},
-            'prompt_count': 0,
-            'has_successful_prompt': {1: False, 2: False, 3: False},
-            'conversation_history': {1: [], 2: [], 3: []},
-            'current_image': {1: None, 2: None, 3: None},
-            'image_generation_errors': [],
-            'is_admin': True
-        }
-        players[session_id] = player
-    else:
-        # Promote existing lobby player to admin
-        player['is_admin'] = True
-        player['display_name'] = 'Gamemaster'
-        player['socket_id'] = request.sid
-
-    admin_session_id = session_id
-
-    print(f"Player {player.get('name')} became ADMIN via footer login")
-
-    # Send admin view to this player
-    socketio.emit('admin_joined', {
-        'is_admin': True,
-        'players': [{
-            'name': p.get('display_name', p['name']),
-            'team': p['team'],
-            'is_admin': p['is_admin'],
-            'is_connected': p.get('socket_id') is not None,
-            'session_id': p['session_id']
-        } for p in players.values()]
-    }, room=player['socket_id'])
-
-    # Update lobby players for everyone (use display_name to hide code)
-    lobby_players = [{
-        'name': p.get('display_name', p['name']),
-        'team': p['team'],
-        'is_admin': p['is_admin'],
-        'is_connected': p.get('socket_id') is not None
-    } for p in players.values()]
-    socketio.emit('lobby_players_update', {'players': lobby_players})
-
     # Also push an admin-specific player status update so the dashboard stays in sync
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         admin_socket_id = players[admin_session_id]['socket_id']
@@ -810,6 +722,13 @@ def handle_admin_login(data):
                 'has_voted': p['has_voted'].get(game_state.get('current_round', 0), False) if game_state.get('current_round') else False,
             } for p in players.values()]
         }, room=admin_socket_id)
+    else:
+        if admin_session_id not in players:
+            print(f"[LOBBY] WARNING: Admin session_id {admin_session_id} not in players dict")
+        elif not players[admin_session_id].get('socket_id'):
+            print(f"[LOBBY] WARNING: Admin has no socket_id (disconnected?)")
+
+    print(f"Player {player.get('display_name', player_name)} joined (Admin: {player['is_admin']})")
 
 @socketio.on('assign_teams')
 def handle_assign_teams():
