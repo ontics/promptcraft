@@ -379,6 +379,21 @@ socket.on('admin_joined', (data) => {
     updateAdminPlayerList(data.players);
 });
 
+// Admin revoked (another admin took over)
+socket.on('admin_revoked', () => {
+    console.log('admin_revoked event received');
+    gameState.isAdmin = false;
+
+    const adminScreen = document.getElementById('admin-screen');
+    const adminControls = document.getElementById('admin-controls');
+    if (adminScreen) {
+        adminScreen.style.display = 'none';
+    }
+    if (adminControls) {
+        adminControls.style.display = 'none';
+    }
+});
+
 socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
     

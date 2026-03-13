@@ -729,10 +729,14 @@ def handle_admin_login(data):
         emit('error', {'message': 'Admin login is only available in the lobby.'})
         return
 
-    # If an admin already exists and is connected, do not allow another admin to log in
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        emit('error', {'message': 'An admin is already active in this game.'})
-        return
+    # If an admin already exists, clear their admin flag so the new admin fully replaces them.
+    # This covers both connected and disconnected admins.
+    if admin_session_id in players:
+        old_admin = players[admin_session_id]
+        old_admin['is_admin'] = False
+        old_admin_socket = old_admin.get('socket_id')
+    else:
+        old_admin_socket = None
 
     if entered_code != required_admin_code:
         emit('error', {'message': 'Incorrect admin password.'})
@@ -810,6 +814,10 @@ def handle_admin_login(data):
                 'has_voted': p['has_voted'].get(game_state.get('current_round', 0), False) if game_state.get('current_round') else False,
             } for p in players.values()]
         }, room=admin_socket_id)
+
+    # If there was a previous connected admin, explicitly notify them they lost admin
+    if old_admin_socket and old_admin_socket != player['socket_id']:
+        socketio.emit('admin_revoked', room=old_admin_socket)
 
 @socketio.on('assign_teams')
 def handle_assign_teams():
