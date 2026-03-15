@@ -729,14 +729,15 @@ def handle_admin_login(data):
         emit('error', {'message': 'Admin login is only available in the lobby.'})
         return
 
-    # If an admin already exists, clear their admin flag so the new admin fully replaces them.
-    # This covers both connected and disconnected admins.
+    # If an admin already exists, disconnect them (remove from game) rather than demote to player.
+    old_admin_socket = None
     if admin_session_id in players:
         old_admin = players[admin_session_id]
-        old_admin['is_admin'] = False
         old_admin_socket = old_admin.get('socket_id')
-    else:
-        old_admin_socket = None
+        del players[admin_session_id]
+        if old_admin_socket and old_admin_socket in player_sessions:
+            del player_sessions[old_admin_socket]
+        admin_session_id = None
 
     if entered_code != required_admin_code:
         emit('error', {'message': 'Incorrect admin password.'})
@@ -815,9 +816,9 @@ def handle_admin_login(data):
             } for p in players.values()]
         }, room=admin_socket_id)
 
-    # If there was a previous connected admin, explicitly notify them they lost admin
+    # If there was a previous connected admin, notify them they were replaced and are disconnected from the game
     if old_admin_socket and old_admin_socket != player['socket_id']:
-        socketio.emit('admin_revoked', room=old_admin_socket)
+        socketio.emit('admin_replaced', {'message': 'You were replaced as Gamemaster. Please rejoin the game.'}, room=old_admin_socket)
 
 @socketio.on('assign_teams')
 def handle_assign_teams():
