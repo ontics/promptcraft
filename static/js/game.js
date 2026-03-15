@@ -156,28 +156,12 @@ function showScreen(screenName) {
     screens[screenName].classList.add('active');
 }
 
-// Lobby handlers
+// Lobby handlers (animal alias assigned by server; no name input)
 function joinGame() {
-    const nameInput = document.getElementById('player-name');
-    const name = nameInput.value.trim();
-
-    if (name) {
-        gameState.playerName = name;
-        socket.emit('join_game', { name: name });
-    } else {
-        alert('Please enter your name');
-    }
+    socket.emit('join_game', {});
 }
 
 document.getElementById('join-btn').addEventListener('click', joinGame);
-
-// Allow Enter to join game in lobby
-document.getElementById('player-name').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        joinGame();
-    }
-});
 
 document.getElementById('assign-teams-btn').addEventListener('click', () => {
     socket.emit('assign_teams');
@@ -1841,13 +1825,6 @@ socket.on('game_restarted_kick', (data) => {
     gameState.playerCharacter = null;
     gameState.isAdmin = false;
     gameState.hasConfirmedSelection = false;
-    
-    // Clear player name input so they need to re-enter
-    const nameInput = document.getElementById('player-name');
-    if (nameInput) {
-        nameInput.value = '';
-        nameInput.disabled = false;
-    }
     
     // Clear player list
     const playerList = document.getElementById('player-list');
