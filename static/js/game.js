@@ -379,6 +379,22 @@ socket.on('admin_joined', (data) => {
     updateAdminPlayerList(data.players);
 });
 
+// Admin replaced (another admin took over) — old Gamemaster is disconnected from the game
+socket.on('admin_replaced', (data) => {
+    console.log('admin_replaced event received');
+    const message = (data && data.message) ? data.message : 'You were replaced as Gamemaster. Please rejoin the game.';
+    gameState.isAdmin = false;
+    showScreen('lobby');
+    if (document.getElementById('admin-screen')) {
+        document.getElementById('admin-screen').style.display = 'none';
+    }
+    if (document.getElementById('admin-controls')) {
+        document.getElementById('admin-controls').style.display = 'none';
+    }
+    socket.disconnect();
+    alert(message);
+});
+
 socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
     
