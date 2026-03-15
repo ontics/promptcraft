@@ -47,6 +47,31 @@ players = {}  # session_id: player_data
 player_sessions = {}  # socket_id: session_id
 admin_session_id = None  # Track the admin player
 
+# Animal aliases for lobby (assigned when player joins with no name)
+ANIMAL_ALIASES = [
+    'Wildcat', 'Shark', 'Bear', 'Fox', 'Owl', 'Wolf', 'Lion', 'Eagle', 'Hawk', 'Tiger',
+    'Otter', 'Rabbit', 'Deer', 'Crow', 'Falcon', 'Lynx', 'Moose', 'Panda', 'Cobra', 'Badger',
+    'Heron', 'Seal', 'Goat', 'Crane', 'Elk', 'Dove', 'Skunk', 'Trout', 'Crab', 'Moth',
+    'Bison', 'Coyote', 'Gecko', 'Hyena', 'Jaguar', 'Koala', 'Lemur', 'Newt', 'Orca', 'Puffin',
+    'Quail', 'Raven', 'Sloth', 'Tapir', 'Urchin', 'Viper', 'Walrus', 'Yak', 'Zebra', 'Anteater'
+]
+
+
+def _assign_random_animal_alias():
+    """Return a random animal alias unique among current lobby players (or with number if all used)."""
+    used = {p.get('display_name', p['name']) for p in players.values()}
+    used.update({p.get('name') for p in players.values()})
+    available = [a for a in ANIMAL_ALIASES if a not in used]
+    if available:
+        return random.choice(available)
+    # All base names used; append number
+    for n in range(2, 100):
+        for a in ANIMAL_ALIASES:
+            candidate = f'{a} {n}'
+            if candidate not in used:
+                return candidate
+    return f'Player{len(players) + 1}'  # fallback
+
 # Character messages
 # Bud messages - shown progressively based on prompt count (1-indexed: prompt_count = 1 shows message[0])
 BUDDY_MESSAGES = [
@@ -276,13 +301,17 @@ def handle_join_game(data):
     global admin_session_id
     
     session_id = session.get('session_id')
-    player_name = data.get('name', f'Player{len(players) + 1}').strip()
-    
-    # Check if player name matches admin code
     required_admin_code = os.getenv('ADMIN_CODE', '').strip()
+    received_name = (data or {}).get('name', '').strip()
+
+    # No name sent -> assign random animal alias (lobby Join Game button flow)
+    if not received_name:
+        player_name = _assign_random_animal_alias()
+    else:
+        player_name = received_name
+
+    # Check if player name matches admin code (only when client sends a name)
     is_admin_code = required_admin_code and (player_name == required_admin_code)
-    
-    # Display name for admin (obscure the code)
     display_name = 'Gamemaster' if is_admin_code else player_name
 
     # Check if player already exists (reconnection)
@@ -317,11 +346,13 @@ def handle_join_game(data):
             # Update name (but preserve display_name if admin)
             if player['is_admin']:
                 # Already admin - keep display_name as Gamemaster
-                player['name'] = player_name  # Update internal name if changed
-                player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
-            else:
+                player['name'] = player_name
+                player['display_name'] = 'Gamemaster'
+            elif received_name:
+                # Client sent a name (e.g. legacy or admin code) - use it
                 player['name'] = player_name
                 player['display_name'] = player_name
+            # else: reconnecting with no name sent - keep existing alias (player['name'], player['display_name'])
         
         # Send reconnection update to admin
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -616,12 +647,12 @@ def handle_join_game(data):
             print(f"Player {player_name} joined as ADMIN (first player, no code configured)")
         
         # Check if this player exists in the database for the current game (reconnection with lost session)
-        # Uses case-insensitive matching
+        # Only when client sent a name (we have a stable name to look up); alias joins are always new
         team = None
         character = None
         restored_player_id = None
         
-        if not is_new_admin and game_state.get('game_id') and db.is_configured():
+        if not is_new_admin and received_name and game_state.get('game_id') and db.is_configured():
             existing_player = db.get_player_by_name_and_game(player_name, game_state['game_id'])
             if existing_player:
                 # Player exists in database - restore their team assignment
