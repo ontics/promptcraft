@@ -47,6 +47,35 @@ players = {}  # session_id: player_data
 player_sessions = {}  # socket_id: session_id
 admin_session_id = None  # Track the admin player
 
+ANIMAL_ALIASES = [
+    'Wildcat', 'Shark', 'Bear', 'Fox', 'Otter', 'Hawk', 'Wolf', 'Tiger', 'Panda', 'Koala',
+    'Dolphin', 'Eagle', 'Badger', 'Raven', 'Cobra', 'Jaguar', 'Moose', 'Falcon', 'Lynx', 'Orca',
+    'Leopard', 'Giraffe', 'Rhino', 'Hippo', 'Bison', 'Cheetah', 'Panther', 'Wombat', 'Gecko', 'Mantis',
+    'Buffalo', 'Camel', 'Caribou', 'Chameleon', 'Crane', 'Crocodile', 'Ferret', 'Flamingo', 'Gazelle', 'Heron',
+    'Ibis', 'Iguana', 'Jackal', 'Kangaroo', 'Kingfisher', 'Lemur', 'Lobster', 'Magpie', 'Narwhal', 'Ocelot',
+    'Pelican', 'Quokka', 'Raccoon', 'Salamander', 'Sea Lion', 'Sparrow', 'Stoat', 'Tapir', 'Viper', 'Walrus'
+]
+
+def get_unique_animal_alias() -> str:
+    existing_names = {
+        p.get('display_name', p.get('name'))
+        for p in players.values()
+        if not p.get('is_admin')
+    }
+    existing_names = {n for n in existing_names if n}
+
+    candidates = ANIMAL_ALIASES[:]
+    random.shuffle(candidates)
+    for alias in candidates:
+        if alias not in existing_names:
+            return alias
+
+    base = random.choice(ANIMAL_ALIASES) if ANIMAL_ALIASES else 'Player'
+    suffix = 2
+    while f"{base} {suffix}" in existing_names:
+        suffix += 1
+    return f"{base} {suffix}"
+
 # Character messages
 # Bud messages - shown progressively based on prompt count (1-indexed: prompt_count = 1 shows message[0])
 BUDDY_MESSAGES = [
@@ -276,11 +305,14 @@ def handle_join_game(data):
     global admin_session_id
     
     session_id = session.get('session_id')
-    player_name = data.get('name', f'Player{len(players) + 1}').strip()
+    data = data or {}
+    raw_name = data.get('name')
+    provided_name = raw_name.strip() if isinstance(raw_name, str) and raw_name.strip() else None
+    player_name = provided_name  # may remain None (auto-alias for new players)
     
     # Check if player name matches admin code
     required_admin_code = os.getenv('ADMIN_CODE', '').strip()
-    is_admin_code = required_admin_code and (player_name == required_admin_code)
+    is_admin_code = bool(required_admin_code and player_name == required_admin_code)
     
     # Display name for admin (obscure the code)
     display_name = 'Gamemaster' if is_admin_code else player_name
@@ -313,15 +345,15 @@ def handle_join_game(data):
                 # Admin reconnecting with admin code - ensure display_name is correct
                 player['name'] = player_name  # Update internal name (code)
                 player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
-        else:
-            # Update name (but preserve display_name if admin)
+        elif provided_name:
+            # Update name only if a name was explicitly provided (UI join uses no name)
             if player['is_admin']:
                 # Already admin - keep display_name as Gamemaster
-                player['name'] = player_name  # Update internal name if changed
+                player['name'] = provided_name  # Update internal name (code) if changed
                 player['display_name'] = 'Gamemaster'  # Always show as Gamemaster
             else:
-                player['name'] = player_name
-                player['display_name'] = player_name
+                player['name'] = provided_name
+                player['display_name'] = provided_name
         
         # Send reconnection update to admin
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -582,6 +614,10 @@ def handle_join_game(data):
         print(f"Player {player.get('display_name', player_name)} reconnected (Admin: {player['is_admin']})")
         return
     else:
+        if not is_admin_code and not player_name:
+            player_name = get_unique_animal_alias()
+            display_name = player_name
+
         # New player - check if they're using admin code as name
         is_new_admin = False
         final_display_name = display_name  # Default to calculated display_name

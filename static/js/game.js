@@ -45,7 +45,7 @@ const screens = {
 // Onboarding (How to Play) - Bud messages
 const onboarding = {
     messages: [
-        "Welcome to PromptCraft! Enter your name above to join.",
+        "Welcome to PromptCraft! Click Join Game to hop in.",
         "Hi there! I'm Bud. Click me to learn how the game works...",
         "In each round, we'll give you an image to target. Your mission is to write prompts that generate an image as close as you can to the target.",
         "Think of it like describing what you see to an AI artist! You'll get 5 minutes each round and you can submit as many prompts as you want during that time.",
@@ -158,26 +158,12 @@ function showScreen(screenName) {
 
 // Lobby handlers
 function joinGame() {
-    const nameInput = document.getElementById('player-name');
-    const name = nameInput.value.trim();
-
-    if (name) {
-        gameState.playerName = name;
-        socket.emit('join_game', { name: name });
-    } else {
-        alert('Please enter your name');
-    }
+    const joinBtn = document.getElementById('join-btn');
+    if (joinBtn) joinBtn.disabled = true;
+    socket.emit('join_game', {});
 }
 
 document.getElementById('join-btn').addEventListener('click', joinGame);
-
-// Allow Enter to join game in lobby
-document.getElementById('player-name').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-        e.preventDefault();
-        joinGame();
-    }
-});
 
 document.getElementById('assign-teams-btn').addEventListener('click', () => {
     socket.emit('assign_teams');
@@ -315,6 +301,9 @@ socket.on('game_joined', (data) => {
     console.log('game_joined event received:', data);
     
     try {
+        const joinBtn = document.getElementById('join-btn');
+        if (joinBtn) joinBtn.disabled = false;
+
         gameState.playerName = data.player.name;
         gameState.playerTeam = data.player.team;
         gameState.playerCharacter = data.player.character;
@@ -330,6 +319,13 @@ socket.on('game_joined', (data) => {
         const playerScore = document.getElementById('player-score');
         if (playerScore) {
             playerScore.textContent = data.player.score;
+        }
+
+        // Show current alias in lobby
+        const aliasEl = document.getElementById('current-alias');
+        if (aliasEl && !gameState.isAdmin) {
+            aliasEl.textContent = `You are playing as: ${data.player.name}`;
+            aliasEl.style.display = 'block';
         }
 
         // Show admin controls if admin (but hide admin screen - they're a player in lobby)
@@ -348,7 +344,7 @@ socket.on('game_joined', (data) => {
         // Initialize onboarding (non-admin only, lobby screen)
         if (!gameState.isAdmin && screens.lobby && screens.lobby.classList.contains('active')) {
         initOnboardingIfNeeded();
-        // Auto-advance Bud to the next message after player enters their name and joins
+        // Auto-advance Bud to the next message after player joins
         if (onboarding.initialized && onboarding.messages.length > 1) {
             setOnboardingMessage(1);
         }
@@ -1867,11 +1863,12 @@ socket.on('game_restarted_kick', (data) => {
     gameState.isAdmin = false;
     gameState.hasConfirmedSelection = false;
     
-    // Clear player name input so they need to re-enter
-    const nameInput = document.getElementById('player-name');
-    if (nameInput) {
-        nameInput.value = '';
-        nameInput.disabled = false;
+    const joinBtn = document.getElementById('join-btn');
+    if (joinBtn) joinBtn.disabled = false;
+    const aliasEl = document.getElementById('current-alias');
+    if (aliasEl) {
+        aliasEl.textContent = '';
+        aliasEl.style.display = 'none';
     }
     
     // Clear player list
@@ -1892,6 +1889,8 @@ socket.on('game_restarted_kick', (data) => {
 });
 
 socket.on('error', (data) => {
+    const joinBtn = document.getElementById('join-btn');
+    if (joinBtn) joinBtn.disabled = false;
     alert(data.message);
 });
 
