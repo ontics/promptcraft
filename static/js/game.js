@@ -639,6 +639,17 @@ function updateAdminPlayerList(players) {
     
     // Add "Clear Lobby" button at the top (only show in lobby)
     if (isInLobby) {
+        const connectedCount = players.filter(p => !p.is_admin && p.is_connected).length;
+        const disconnectedCount = players.filter(p => !p.is_admin && !p.is_connected).length;
+
+        const countsEl = document.createElement('div');
+        countsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+        countsEl.innerHTML = `
+            <div><strong>Connected:</strong> ${connectedCount}</div>
+            <div><strong>Disconnected:</strong> ${disconnectedCount}</div>
+        `;
+        adminPlayerList.appendChild(countsEl);
+
         const clearLobbyBtn = document.createElement('button');
         clearLobbyBtn.className = 'btn btn-danger';
         clearLobbyBtn.style.cssText = 'margin-bottom: 15px; width: 100%; padding: 10px;';
