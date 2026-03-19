@@ -802,33 +802,9 @@ function updatePlayerList(players) {
     
     // Count non-admin players
     let nonAdminCount = 0;
-    
-    // Find current player's team for inline message
-    const currentPlayer = players.find(p => p.name === gameState.playerName);
-    const currentPlayerTeam = currentPlayer ? currentPlayer.team : null;
-    
-    // Update inline team message
-    const lobbyInfo = document.querySelector('.lobby-info');
-    if (lobbyInfo) {
-        // Remove existing team message if present
-        const existingTeamMsg = lobbyInfo.querySelector('.player-team-message');
-        if (existingTeamMsg) {
-            existingTeamMsg.remove();
-        }
-        
-        // Add team message if player has a team
-        if (currentPlayerTeam && !gameState.isAdmin) {
-            const teamMsg = document.createElement('span');
-            teamMsg.className = 'player-team-message';
-            teamMsg.style.cssText = 'margin-left: 10px; font-size: 1rem;';
-            const teamColor = currentPlayerTeam === 'Green' ? '#155724' : '#cc6600';
-            teamMsg.innerHTML = ` | You are <strong style="color: ${teamColor};">${currentPlayerTeam}</strong>`;
-            const lobbyCountEl = document.getElementById('lobby-count');
-            if (lobbyCountEl && lobbyCountEl.parentNode) {
-                lobbyCountEl.parentNode.appendChild(teamMsg);
-            }
-        }
-    }
+
+    // Story: hide team assignment (Green/Orange) from the lobby UI.
+    // Admin/Gamemaster view still shows teams via `updateAdminPlayerList()`.
     
     players.forEach(player => {
         const item = document.createElement('div');
@@ -838,26 +814,23 @@ function updatePlayerList(players) {
         let badgeText = '';
         let badgeClass = '';
         let badgeStyle = '';
+        let showBadge = false;
         if (player.is_admin) {
             badgeText = 'Admin';
             badgeStyle = 'background: #667eea; color: white;';
+            showBadge = true;
         } else {
             nonAdminCount++;
-            if (player.team) {
-                badgeText = player.team; // Just show "Green" or "Orange"
-                badgeClass = `team-${player.team}`; // Apply CSS class for color
-        } else {
+            if (!player.team) {
             badgeText = 'Waiting';
             badgeStyle = 'background: #e0e0e0;';
+                showBadge = true;
             }
         }
         
         // Connection status removed from lobby display (still tracked for admin dashboard)
         
-        item.innerHTML = `
-            <span>${player.name}</span>
-            <span class="player-team-badge ${badgeClass}" style="${badgeStyle}">${badgeText}</span>
-        `;
+        item.innerHTML = `<span>${player.name}</span>${showBadge ? `<span class="player-team-badge ${badgeClass}" style="${badgeStyle}">${badgeText}</span>` : ''}`;
         playerList.appendChild(item);
     });
     
