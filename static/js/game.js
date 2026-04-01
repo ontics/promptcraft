@@ -1,6 +1,9 @@
 // Socket.IO connection
 const socket = io();
 
+/** Study groups (must match app.py PLAYER_GROUPS). */
+const PLAYER_GROUPS = ['C_NA', 'C_HU', 'T_NA', 'T_HU'];
+
 // Game state
 let gameState = {
     playerName: '',
@@ -51,7 +54,7 @@ const onboarding = {
         "Think of it like describing what you see to an AI artist! You'll get 5 minutes each round and you can submit as many prompts as you want during that time.",
         "At the end of each round, you'll see all the images you generated. Pick the one that matches the target best. That's the one you'll submit for others to see!",
         "Then you get to vote on which image looks most like the target! You'll earn a point for every vote your image receives.",
-        "Orange and Green players will sit apart but there are no teams – it's every player for themselves. The Gamemaster will assign your group soon.",
+        "The Gamemaster will assign you to a study group before we start. It's every player for themselves during play.",
         "We'll play 3 rounds in total. We'll let you know when we're about to begin. Have fun!"
     ],
     index: 0,
@@ -697,22 +700,25 @@ function updateAdminPlayerList(players) {
             // Add options first
             const optionNone = document.createElement('option');
             optionNone.value = '';
-            optionNone.textContent = 'No Team';
+            optionNone.textContent = 'No group';
             teamSelect.appendChild(optionNone);
             
-            const optionGreen = document.createElement('option');
-            optionGreen.value = 'Green';
-            optionGreen.textContent = 'Green';
-            teamSelect.appendChild(optionGreen);
-            
-            const optionOrange = document.createElement('option');
-            optionOrange.value = 'Orange';
-            optionOrange.textContent = 'Orange';
-            teamSelect.appendChild(optionOrange);
+            PLAYER_GROUPS.forEach((g) => {
+                const opt = document.createElement('option');
+                opt.value = g;
+                opt.textContent = g;
+                teamSelect.appendChild(opt);
+            });
+            if (player.team === 'Green' || player.team === 'Orange') {
+                const leg = document.createElement('option');
+                leg.value = player.team;
+                leg.textContent = `${player.team} (legacy)`;
+                teamSelect.appendChild(leg);
+            }
             
             // Set value AFTER options are added to ensure it works correctly
-            // Handle null/undefined team values - explicitly convert to empty string for "No Team"
-            const teamValue = (player.team && (player.team === 'Green' || player.team === 'Orange')) ? player.team : '';
+            // Handle null/undefined team values - explicitly convert to empty string for "No group"
+            const teamValue = (player.team && (PLAYER_GROUPS.includes(player.team) || player.team === 'Green' || player.team === 'Orange')) ? player.team : '';
             console.log(`Setting dropdown for ${player.name}: team="${player.team}" -> value="${teamValue}"`);
             teamSelect.value = teamValue;
             
@@ -814,8 +820,8 @@ function updatePlayerList(players) {
     // Count non-admin players
     let nonAdminCount = 0;
 
-    // Story: hide team assignment (Green/Orange) from the lobby UI.
-    // Admin/Gamemaster view still shows teams via `updateAdminPlayerList()`.
+    // Story: hide group assignment from the lobby UI.
+    // Admin/Gamemaster view still shows groups via `updateAdminPlayerList()`.
     
     players.forEach(player => {
         const item = document.createElement('div');
