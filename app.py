@@ -125,26 +125,53 @@ SPUDDY_ERROR_MESSAGE = "That prompt didn't go through. You could try again... or
 def generate_session_id():
     return os.urandom(16).hex()
 
+# Four study groups (stored in DB `team` and shown in admin). C_* = control; T_* = treatment.
+PLAYER_GROUPS = ('C_NA', 'C_HU', 'T_NA', 'T_HU')
+
+
+def is_control_group(team):
+    """Control groups see Buddy/Bud; treatment groups see Spuddy/Spud. Legacy Green/Orange still supported."""
+    if team in ('C_NA', 'C_HU', 'Green'):
+        return True
+    if team in ('T_NA', 'T_HU', 'Orange'):
+        return False
+    return False  # None / unknown: same as old non-Green (treatment)
+
+
 def assign_team():
-    # Random assignment to Team Green or Team Orange
-    return random.choice(['Green', 'Orange'])
+    """Random single-group pick (e.g. for tests); lobby assignment uses split_into_player_groups."""
+    return random.choice(PLAYER_GROUPS)
+
 
 def get_character(team):
-    return 'Buddy' if team == 'Green' else 'Spuddy'
+    return 'Buddy' if is_control_group(team) else 'Spuddy'
+
 
 def get_character_for_round(player, current_round):
     """
     Determine which character a player sees based on round number.
     Round 1: All players see Bud (control)
-    Rounds 2-3: Team Green sees Bud, Team Orange sees Spud (treatment)
+    Rounds 2-3: C_NA / C_HU (and legacy Green) see Bud; T_NA / T_HU (and legacy Orange) see Spud (treatment)
     """
     if current_round == 1:
         return 'Bud'
-    else:  # Rounds 2 and 3
-        if player.get('team') == 'Green':
-            return 'Bud'
-        else:  # Team Orange (treatment)
-            return 'Spud'
+    return 'Bud' if is_control_group(player.get('team')) else 'Spud'
+
+
+def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
+    """
+    Split a shuffled list into len(group_labels) segments with sizes as equal as possible;
+    remainder players go to the first groups in order (C_NA, then C_HU, then T_NA, then T_HU).
+    """
+    n = len(shuffled_players)
+    k = len(group_labels)
+    out = []
+    start = 0
+    for i in range(k):
+        size = n // k + (1 if i < n % k else 0)
+        out.append((group_labels[i], shuffled_players[start : start + size]))
+        start += size
+    return out
 
 def get_spud_plant_state(prompt_count, has_successful_prompt=False):
     """
@@ -894,22 +921,15 @@ def handle_assign_teams():
             player['team'] = None
             player['character'] = None
     
-    # Shuffle connected players for random assignment
+    # Shuffle connected players for random assignment, then split into four balanced groups
     random.shuffle(connected_players)
-    
-    # Balance teams: split evenly, with extra players going to Team Green if odd
-    mid_point = len(connected_players) // 2
-    team_green_players = connected_players[:mid_point]
-    team_orange_players = connected_players[mid_point:]
-    
-    # Assign teams only to connected players
-    for player in team_green_players:
-        player['team'] = 'Green'
-        player['character'] = get_character('Green')
-    
-    for player in team_orange_players:
-        player['team'] = 'Orange'
-        player['character'] = get_character('Orange')
+    group_chunks = split_into_player_groups(connected_players)
+    group_sizes = []
+    for group_label, members in group_chunks:
+        group_sizes.append(len(members))
+        for player in members:
+            player['team'] = group_label
+            player['character'] = get_character(group_label)
     
     # Update players in database if game has started
     if game_state.get('game_id') and db.is_configured():
@@ -933,7 +953,7 @@ def handle_assign_teams():
         # Send player status update (works in lobby and during game)
         player_list = [{
             'name': p.get('display_name', p['name']),
-            'team': p['team'],  # This should be 'Green' or 'Orange' after assignment
+            'team': p['team'],  # C_NA / C_HU / T_NA / T_HU after assignment
             'is_admin': p['is_admin'],
             'is_connected': p.get('socket_id') is not None,
             'session_id': p['session_id']
@@ -947,7 +967,7 @@ def handle_assign_teams():
         if game_state['status'] != 'lobby':
             handle_admin_get_status()
     
-    print(f"Teams assigned by admin: Team Green ({len(team_green_players)}), Team Orange ({len(team_orange_players)})")
+    print(f"Groups assigned by admin: {dict(zip(PLAYER_GROUPS, group_sizes))}")
 
 @socketio.on('start_game')
 def handle_start_game():
@@ -2879,8 +2899,8 @@ def handle_set_player_team(data):
         emit('error', {'message': 'Missing session_id or team'})
         return
     
-    if team not in ['Green', 'Orange']:
-        emit('error', {'message': 'Team must be "Green" or "Orange"'})
+    if team not in PLAYER_GROUPS:
+        emit('error', {'message': f'Team must be one of: {", ".join(PLAYER_GROUPS)}'})
         return
     
     # Check if player exists
@@ -2929,8 +2949,8 @@ def handle_set_player_team(data):
 
 def set_player_team_console(target_session_id: str, team: str):
     """Console command: Set a player's team manually"""
-    if team not in ['Green', 'Orange']:
-        print(f"❌ ERROR: Team must be 'Green' or 'Orange'")
+    if team not in PLAYER_GROUPS:
+        print(f"❌ ERROR: Team must be one of {list(PLAYER_GROUPS)}")
         return
     
     if target_session_id not in players:

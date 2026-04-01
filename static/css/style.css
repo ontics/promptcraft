@@ -96,14 +96,25 @@ body {
     font-weight: bold;
 }
 
-.team-Green {
-    background: #c7e2d4;
-    color: #155724;
+/* Study group labels (admin / badges); optional use with class team-<label> */
+.team-C_NA {
+    background: #dbeafe;
+    color: #1e3a5f;
 }
 
-.team-Orange {
-    background: #ffe4cc;
-    color: #cc6600;
+.team-C_HU {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.team-T_NA {
+    background: #ffedd5;
+    color: #9a3412;
+}
+
+.team-T_HU {
+    background: #ede9fe;
+    color: #5b21b6;
 }
 
 .admin-controls {
