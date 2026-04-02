@@ -974,6 +974,83 @@ body {
     gap: 24px;
 }
 
+.lobby-survey-title {
+    font-size: 1.35rem;
+    margin-bottom: 8px;
+    color: #212529;
+}
+
+.lobby-survey-intro {
+    color: #495057;
+    margin-bottom: 16px;
+    font-size: 0.95rem;
+}
+
+.lobby-survey-fieldset {
+    border: 1px solid #dee2e6;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
+}
+
+.lobby-survey-fieldset legend {
+    font-weight: 600;
+    padding: 0 6px;
+    color: #343a40;
+}
+
+.lobby-survey-prompt {
+    font-size: 0.95rem;
+    margin-bottom: 12px;
+    color: #495057;
+    line-height: 1.45;
+}
+
+.lobby-survey-option {
+    display: block;
+    margin: 8px 0;
+    font-size: 0.9rem;
+    line-height: 1.4;
+    cursor: pointer;
+    padding-left: 2px;
+}
+
+.lobby-survey-option input {
+    margin-right: 8px;
+    vertical-align: top;
+    margin-top: 3px;
+}
+
+.lobby-survey-textarea {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ced4da;
+    border-radius: 8px;
+    font-size: 0.95rem;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 88px;
+}
+
+.lobby-survey-error {
+    color: #c92a2a;
+    font-size: 0.9rem;
+    margin: 8px 0;
+}
+
+#lobby-survey-form-wrap #pre-survey-submit-btn {
+    width: 100%;
+    box-sizing: border-box;
+    display: block;
+    margin-top: 4px;
+}
+
+.lobby-survey-done {
+    padding: 12px 0;
+    font-size: 1rem;
+    color: #2b8a3e;
+}
+
 .card {
     background: white;
     border-radius: 16px;

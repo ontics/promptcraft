@@ -123,6 +123,92 @@ def end_round(round_id: int):
         print(f"❌ Error ending round: {e}")
 
 
+def save_pre_survey_pending(
+    player_id: str,
+    proficiency: str,
+    frequency: str,
+    skills_text: str,
+) -> bool:
+    """
+    Store pre-survey answers before a game_id exists (lobby).
+    Flushed onto the `players` row when create_player runs after the game starts.
+    """
+    if not is_configured() or not player_id:
+        return False
+    try:
+        now = datetime.utcnow().isoformat()
+        supabase.table('pre_survey_pending').upsert(
+            {
+                'player_id': player_id,
+                'proficiency': proficiency,
+                'frequency': frequency,
+                'skills_text': skills_text,
+                'submitted_at': now,
+            },
+            on_conflict='player_id',
+        ).execute()
+        print(f"✅ Saved pre_survey_pending for player {player_id[:8]}...")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving pre_survey_pending: {e}")
+        return False
+
+
+def update_player_pre_survey(
+    game_id: int,
+    player_id: str,
+    proficiency: str,
+    frequency: str,
+    skills_text: str,
+) -> bool:
+    """Write pre-survey columns on the analytics `players` row (game already created)."""
+    if not is_configured() or not game_id or not player_id:
+        return False
+    try:
+        now = datetime.utcnow().isoformat()
+        supabase.table('players').update(
+            {
+                'pre_survey_proficiency': proficiency,
+                'pre_survey_frequency': frequency,
+                'pre_survey_skills_text': skills_text,
+                'pre_survey_submitted_at': now,
+            }
+        ).eq('player_id', player_id).eq('game_id', game_id).execute()
+        print(f"✅ Updated pre-survey on players row for {player_id[:8]}... game_id={game_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error updating player pre-survey: {e}")
+        return False
+
+
+def flush_pre_survey_pending_to_player(player_id: str, game_id: int) -> None:
+    """Copy lobby-time pre-survey from pre_survey_pending onto `players`, then remove pending."""
+    if not is_configured() or not game_id or not player_id:
+        return
+    try:
+        result = (
+            supabase.table('pre_survey_pending')
+            .select('proficiency, frequency, skills_text, submitted_at')
+            .eq('player_id', player_id)
+            .execute()
+        )
+        if not result.data:
+            return
+        row = result.data[0]
+        supabase.table('players').update(
+            {
+                'pre_survey_proficiency': row.get('proficiency'),
+                'pre_survey_frequency': row.get('frequency'),
+                'pre_survey_skills_text': row.get('skills_text'),
+                'pre_survey_submitted_at': row.get('submitted_at'),
+            }
+        ).eq('player_id', player_id).eq('game_id', game_id).execute()
+        supabase.table('pre_survey_pending').delete().eq('player_id', player_id).execute()
+        print(f"✅ Flushed pre_survey_pending → players for {player_id[:8]}...")
+    except Exception as e:
+        print(f"❌ Error flushing pre_survey_pending: {e}")
+
+
 def create_player(game_id: int, player_id: str, player_name: str, team: Optional[str] = None, character: Optional[str] = None):
     """Create or update a player in the database."""
     if not is_configured() or not game_id:
@@ -153,6 +239,7 @@ def create_player(game_id: int, player_id: str, player_name: str, team: Optional
         
         _game_id_cache[player_id] = game_id
         print(f"✅ Created/updated player: {player_id} ({player_name})")
+        flush_pre_survey_pending_to_player(player_id, game_id)
     except Exception as e:
         print(f"❌ Error creating player: {e}")
 

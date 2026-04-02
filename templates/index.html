@@ -34,32 +34,38 @@
                                 </div>
                             </div>
                         </div>
-                        <!-- Right: How to Play with Bud -->
-                        <div class="onboarding-wrapper card">
-                            <div class="howto-header">
-                                <h3 class="onboarding-title">How to Play</h3>
+                        <!-- Right: Pre-survey (non-admin players after join) -->
+                        <div id="lobby-survey-card" class="lobby-survey-wrapper card" style="display: none;">
+                            <h3 class="lobby-survey-title">Before we start</h3>
+                            <p class="lobby-survey-intro">Please answer all questions, then click Submit.</p>
+                            <div id="lobby-survey-form-wrap">
+                                <fieldset class="lobby-survey-fieldset">
+                                    <legend>1. AI proficiency</legend>
+                                    <p class="lobby-survey-prompt">Which best describes your current level of proficiency with AI or large language model tools (e.g., ChatGPT, Claude, Gemini)?</p>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-proficiency" value="novice"> <strong>Novice:</strong> I have only tried these tools once or twice.</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-proficiency" value="beginner"> <strong>Beginner:</strong> I can write simple, single-turn prompts for basic tasks (e.g., answering questions, writing a simple email), but I rarely refine or iterate on the AI's responses.</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-proficiency" value="intermediate"> <strong>Intermediate:</strong> I regularly use these tools to assist with specific workflows. I write detailed, multi-part prompts and frequently iterate (back-and-forth prompting) to steer the AI toward a better output.</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-proficiency" value="advanced"> <strong>Advanced:</strong> I understand the underlying mechanics (e.g., context windows, model differences) and use advanced techniques (e.g., few-shot prompting, structured data formatting, system instructions) to integrate AI deeply into complex tasks.</label>
+                                </fieldset>
+                                <fieldset class="lobby-survey-fieldset">
+                                    <legend>2. Frequency</legend>
+                                    <p class="lobby-survey-prompt">How frequently do you use an AI chatbot (e.g., ChatGPT, Claude, Gemini)?</p>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-frequency" value="never"> Never (I don’t use AI chatbots)</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-frequency" value="rarely"> Rarely (Less than 1 time a month)</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-frequency" value="sometimes"> Sometimes (2-3 times per month)</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-frequency" value="often"> Often (1-2 times per week)</label>
+                                    <label class="lobby-survey-option"><input type="radio" name="pre-survey-frequency" value="very_often"> Very often (multiple times per week or daily)</label>
+                                </fieldset>
+                                <fieldset class="lobby-survey-fieldset">
+                                    <legend>3. Skills</legend>
+                                    <p class="lobby-survey-prompt">What skills do you think are important for creating high-quality AI outputs?</p>
+                                    <textarea id="pre-survey-skills" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                                </fieldset>
+                                <p id="lobby-survey-error" class="lobby-survey-error" style="display: none;" role="alert"></p>
+                                <button type="button" id="pre-survey-submit-btn" class="btn btn-primary" disabled>Submit</button>
                             </div>
-                            <!-- Dialogue bubble above Bud -->
-                            <div id="onboarding-bubble" class="onboarding-bubble" style="max-width: 520px; margin: 0 auto 10px;">
-                                <p id="onboarding-text"></p>
-                            </div>
-                            <!-- Bud centered with side arrows -->
-                            <div class="howto-avatar" style="justify-content: center;">
-                                <button id="onboarding-prev" class="onboarding-arrow" aria-label="Previous">&lt;</button>
-                                <div id="onboarding-avatar" class="onboarding-avatar" title="Bud">
-                                    <div id="onboarding-bud-img" style="width: 80%; height: 80%; display: flex; align-items: center; justify-content: center;"></div>
-                                </div>
-                                <button id="onboarding-next" class="onboarding-arrow" aria-label="Next">&gt;</button>
-                            </div>
-                        <div class="onboarding-list">
-                                <ul id="onboarding-list">
-                                    <li id="ob-item-2" class="hidden">🎯 Prompt an image which matches the target</li>
-                                    <li id="ob-item-3" class="hidden">⏱️ Generate as many as you want within 5 minutes</li>
-                                    <li id="ob-item-4" class="hidden">🖼️ Pick your best image at the end of the round</li>
-                                    <li id="ob-item-5" class="hidden">🗳️ Vote for the image you think looks most like the target</li>
-                                    <li id="ob-item-6" class="hidden">🏆 Earn points based on votes you receive</li>
-                                    <li id="ob-item-7" class="hidden">🎮 Play 3 rounds - highest scoring player wins!</li>
-                                </ul>
+                            <div id="lobby-survey-done" class="lobby-survey-done" style="display: none;">
+                                <p>Thank you. We've recorded your response. We'll start soon.</p>
                             </div>
                         </div>
                     </div>
