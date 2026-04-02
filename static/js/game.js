@@ -28,7 +28,8 @@ let gameState = {
     roundEndTime: null,  // Unix timestamp for round end
     votingStartTime: null,  // Unix timestamp for voting start
     votingDuration: null,  // Duration in seconds
-    inSelectionPhase: false  // Track if we're in the selection phase (for late-arriving images)
+    inSelectionPhase: false,  // Track if we're in the selection phase (for late-arriving images)
+    surveyCompleted: false
 };
 
 // DOM elements
@@ -42,121 +43,121 @@ const screens = {
     gameover: document.getElementById('gameover-screen')
 };
 
-// Avatar image cache for performance (prevents repeated HTTP requests)
-// Avatar images are now embedded inline - no preloading or HTTP requests needed!
+// Avatar images are embedded inline — no preloading or HTTP requests needed.
 
-// Onboarding (How to Play) - Bud messages
-const onboarding = {
-    messages: [
-        "Welcome to PromptCraft! Click Join Game to hop in.",
-        "Hi there! I'm Bud. Click me to learn how the game works...",
-        "In each round, we'll give you an image to target. Your mission is to write prompts that generate an image as close as you can to the target.",
-        "Think of it like describing what you see to an AI artist! You'll get 5 minutes each round and you can submit as many prompts as you want during that time.",
-        "At the end of each round, you'll see all the images you generated. Pick the one that matches the target best. That's the one you'll submit for others to see!",
-        "Then you get to vote on which image looks most like the target! You'll earn a point for every vote your image receives.",
-        "The Gamemaster will assign you to a study group before we start. It's every player for themselves during play.",
-        "We'll play 3 rounds in total. We'll let you know when we're about to begin. Have fun!"
-    ],
-    index: 0,
-    initialized: false,
-    animTimer: null
-};
+const PRE_SURVEY_SKILLS_MAX = 2000;
 
-function onboardingStartTalking() {
-    const img = document.getElementById('onboarding-bud-img');
-    if (!img) return;
-    // Avoid multiple timers
-    onboardingStopTalking();
-    let showTalking = false;
-    onboarding.animTimer = setInterval(() => {
-        showTalking = !showTalking;
-        // Use inline SVG data instead of HTTP requests
-        const svgKey = showTalking ? 'bud/bud_talking' : 'bud/bud_smiling';
-        const svgContent = inlineSVGData[svgKey];
-        if (svgContent) {
-            img.innerHTML = svgContent;
-        }
-    }, 500);
+function readPreSurveyForm() {
+    const prof = document.querySelector('input[name="pre-survey-proficiency"]:checked');
+    const freq = document.querySelector('input[name="pre-survey-frequency"]:checked');
+    const skillsEl = document.getElementById('pre-survey-skills');
+    const skills = (skillsEl && skillsEl.value) ? skillsEl.value.trim() : '';
+    return {
+        proficiency: prof ? prof.value : null,
+        frequency: freq ? freq.value : null,
+        skills_text: skills
+    };
 }
 
-function onboardingStopTalking() {
-    if (onboarding.animTimer) {
-        clearInterval(onboarding.animTimer);
-        onboarding.animTimer = null;
+function updatePreSurveySubmitEnabled() {
+    const btn = document.getElementById('pre-survey-submit-btn');
+    if (!btn || gameState.surveyCompleted) return;
+    const { proficiency, frequency, skills_text } = readPreSurveyForm();
+    const ok = proficiency && frequency && skills_text.length > 0 && skills_text.length <= PRE_SURVEY_SKILLS_MAX;
+    btn.disabled = !ok;
+}
+
+function showLobbySurveyForPlayer() {
+    const card = document.getElementById('lobby-survey-card');
+    const formWrap = document.getElementById('lobby-survey-form-wrap');
+    const done = document.getElementById('lobby-survey-done');
+    const err = document.getElementById('lobby-survey-error');
+    if (!card) return;
+
+    if (gameState.isAdmin) {
+        card.style.display = 'none';
+        return;
     }
-    const img = document.getElementById('onboarding-bud-img');
-    if (img) {
-        // Use inline SVG data instead of HTTP requests
-        const svgContent = inlineSVGData['bud/bud_smiling'];
-        if (svgContent) {
-            img.innerHTML = svgContent;
-        }
+
+    const onLobby = screens.lobby && screens.lobby.classList.contains('active');
+    if (!onLobby) {
+        card.style.display = 'none';
+        return;
+    }
+
+    card.style.display = 'block';
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+
+    if (gameState.surveyCompleted) {
+        if (formWrap) formWrap.style.display = 'none';
+        if (done) done.style.display = 'block';
+    } else {
+        if (formWrap) formWrap.style.display = 'block';
+        if (done) done.style.display = 'none';
+        updatePreSurveySubmitEnabled();
     }
 }
 
-function setOnboardingMessage(index) {
-    const bubble = document.getElementById('onboarding-bubble');
-    const text = document.getElementById('onboarding-text');
-    const prevBtn = document.getElementById('onboarding-prev');
-    const nextBtn = document.getElementById('onboarding-next');
-    const budImg = document.getElementById('onboarding-bud-img');
-    if (!bubble || !text || !prevBtn || !nextBtn) return;
-    onboarding.index = Math.max(0, Math.min(index, onboarding.messages.length - 1));
-    text.textContent = onboarding.messages[onboarding.index];
-    bubble.style.display = 'block';
-    prevBtn.disabled = onboarding.index === 0;
-    
-    // Initialize avatar with inline SVG if not already set
-    if (budImg && !budImg.innerHTML && inlineSVGData) {
-        const svgContent = inlineSVGData['bud/bud_smiling'];
-        if (svgContent) {
-            budImg.innerHTML = svgContent;
-        }
-    }
-    nextBtn.disabled = onboarding.index === onboarding.messages.length - 1;
-    // Animate Bud while a message is displayed
-    onboardingStartTalking();
-    // Progressive checklist appears starting from message 2 (index >= 1)
-    const showCount = Math.max(0, onboarding.index); // index 1 => show first list item (2)
-    const items = [
-        document.getElementById('ob-item-2'),
-        document.getElementById('ob-item-3'),
-        document.getElementById('ob-item-4'),
-        document.getElementById('ob-item-5'),
-        document.getElementById('ob-item-6'),
-        document.getElementById('ob-item-7')
-    ];
-    items.forEach((el, i) => {
-        if (!el) return;
-        // With the added welcome message at index 0,
-        // show the first list item starting at message index 2 (i.e., i + 2)
-        if (onboarding.index >= (i + 2)) {
-            el.classList.remove('hidden');
-            el.classList.add('visible');
-        }
+function initLobbyPreSurvey() {
+    const submitBtn = document.getElementById('pre-survey-submit-btn');
+    const skillsEl = document.getElementById('pre-survey-skills');
+    if (!submitBtn) return;
+
+    document.querySelectorAll('input[name="pre-survey-proficiency"], input[name="pre-survey-frequency"]').forEach((el) => {
+        el.addEventListener('change', updatePreSurveySubmitEnabled);
     });
+    if (skillsEl) {
+        skillsEl.addEventListener('input', updatePreSurveySubmitEnabled);
+    }
+
+    submitBtn.addEventListener('click', () => {
+        const err = document.getElementById('lobby-survey-error');
+        const { proficiency, frequency, skills_text } = readPreSurveyForm();
+        if (!proficiency || !frequency) {
+            if (err) {
+                err.textContent = 'Please answer both multiple-choice questions.';
+                err.style.display = 'block';
+            }
+            return;
+        }
+        if (!skills_text.length) {
+            if (err) {
+                err.textContent = 'Please enter an answer for the open-ended question.';
+                err.style.display = 'block';
+            }
+            return;
+        }
+        if (skills_text.length > PRE_SURVEY_SKILLS_MAX) {
+            if (err) {
+                err.textContent = `Answer is too long (max ${PRE_SURVEY_SKILLS_MAX} characters).`;
+                err.style.display = 'block';
+            }
+            return;
+        }
+        if (err) err.style.display = 'none';
+        socket.emit('submit_pre_survey', {
+            proficiency,
+            frequency,
+            skills_text
+        });
+    });
+
+    updatePreSurveySubmitEnabled();
 }
 
-function initOnboardingIfNeeded() {
-    if (onboarding.initialized) return;
-    const avatar = document.getElementById('onboarding-avatar');
-    const prevBtn = document.getElementById('onboarding-prev');
-    const nextBtn = document.getElementById('onboarding-next');
-    if (!avatar || !prevBtn || !nextBtn) return;
-    onboarding.initialized = true;
-    setOnboardingMessage(0); // Show first message automatically
-    avatar.addEventListener('click', () => setOnboardingMessage(onboarding.index + 1));
-    nextBtn.addEventListener('click', () => setOnboardingMessage(onboarding.index + 1));
-    prevBtn.addEventListener('click', () => setOnboardingMessage(onboarding.index - 1));
-}
-// Ensure onboarding shows immediately on landing in the lobby
 document.addEventListener('DOMContentLoaded', () => {
-    initOnboardingIfNeeded();
+    initLobbyPreSurvey();
 });
 // Utility function to show screen
 function showScreen(screenName) {
     Object.values(screens).forEach(screen => screen.classList.remove('active'));
     screens[screenName].classList.add('active');
+    if (screenName === 'lobby') {
+        showLobbySurveyForPlayer();
+    }
 }
 
 // Lobby handlers
@@ -300,6 +301,11 @@ socket.on('disconnect', () => {
     console.log('Disconnected from server');
 });
 
+socket.on('survey_submitted', () => {
+    gameState.surveyCompleted = true;
+    showLobbySurveyForPlayer();
+});
+
 socket.on('game_joined', (data) => {
     console.log('game_joined event received:', data);
     
@@ -311,6 +317,7 @@ socket.on('game_joined', (data) => {
         gameState.playerTeam = data.player.team;
         gameState.playerCharacter = data.player.character;
         gameState.isAdmin = data.player.is_admin;
+        gameState.surveyCompleted = data.player.survey_completed === true;
 
         const playerDisplayName = document.getElementById('player-display-name');
         if (playerDisplayName) {
@@ -344,14 +351,7 @@ socket.on('game_joined', (data) => {
             updatePlayerList(data.lobby_players);
         }
 
-        // Initialize onboarding (non-admin only, lobby screen)
-        if (!gameState.isAdmin && screens.lobby && screens.lobby.classList.contains('active')) {
-        initOnboardingIfNeeded();
-        // Auto-advance Bud to the next message after player joins
-        if (onboarding.initialized && onboarding.messages.length > 1) {
-            setOnboardingMessage(1);
-        }
-        }
+        showLobbySurveyForPlayer();
 
         console.log('Joined game as', data.player.name);
     } catch (error) {
@@ -376,6 +376,7 @@ socket.on('admin_joined', (data) => {
     
     // Update admin player list
     updateAdminPlayerList(data.players);
+    showLobbySurveyForPlayer();
 });
 
 // Admin replaced (another admin took over) — old Gamemaster is disconnected from the game
@@ -644,12 +645,17 @@ function updateAdminPlayerList(players) {
     if (isInLobby) {
         const connectedCount = players.filter(p => !p.is_admin && p.is_connected).length;
         const disconnectedCount = players.filter(p => !p.is_admin && !p.is_connected).length;
+        const nonAdminLobby = players.filter(p => !p.is_admin);
+        const preSurveyCompletedCount = nonAdminLobby.filter(p => p.survey_completed === true).length;
+        const preSurveyPendingCount = nonAdminLobby.length - preSurveyCompletedCount;
 
         const countsEl = document.createElement('div');
         countsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
         countsEl.innerHTML = `
             <div><strong>Connected:</strong> ${connectedCount}</div>
             <div><strong>Disconnected:</strong> ${disconnectedCount}</div>
+            <div><strong>Pre-survey:</strong> ${preSurveyPendingCount}</div>
+            <div><strong>Pre-survey completed:</strong> ${preSurveyCompletedCount}</div>
         `;
         adminPlayerList.appendChild(countsEl);
 
@@ -750,9 +756,18 @@ function updateAdminPlayerList(players) {
         leftDiv.appendChild(nameRow);
         
         // Status and info
+        let phaseBadge = '';
+        if (!player.is_admin) {
+            if (isInLobby) {
+                phaseBadge = `<br><small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
+            } else if (!selectionStatus && !voteStatus) {
+                phaseBadge = '<br><small style="color: #5f3dc4; font-weight: 600;">Prompting</small>';
+            }
+        }
         const infoDiv = document.createElement('div');
         infoDiv.innerHTML = `
             <small style="color: ${statusColor}">${statusText}</small>
+            ${phaseBadge}
             <br><small class="prompts-count">Prompts: ${promptsSubmitted}</small>
             ${selectionStatus ? `<br><small>${selectionStatus}</small>` : ''}
             ${voteStatus ? `<br><small>${voteStatus}</small>` : ''}

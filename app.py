@@ -173,6 +173,75 @@ def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
         start += size
     return out
 
+
+# Pre-lobby survey (proficiency, frequency, free response)
+VALID_SURVEY_PROFICIENCY = frozenset({'novice', 'beginner', 'intermediate', 'advanced'})
+VALID_SURVEY_FREQUENCY = frozenset({'never', 'rarely', 'sometimes', 'often', 'very_often'})
+SURVEY_SKILLS_MAX_LEN = 2000
+
+
+def ensure_survey_fields(player):
+    player.setdefault('survey_completed', False)
+    player.setdefault('survey_proficiency', None)
+    player.setdefault('survey_frequency', None)
+    player.setdefault('survey_skills_text', None)
+
+
+def lobby_player_row(p, use_socket_id_key=False):
+    """Single entry for lobby_players_update / game_joined lobby list."""
+    ensure_survey_fields(p)
+    row = {
+        'name': p.get('display_name', p['name']),
+        'team': p['team'],
+        'is_admin': p['is_admin'],
+    }
+    if use_socket_id_key:
+        row['socket_id'] = p.get('socket_id') is not None
+    else:
+        row['is_connected'] = p.get('socket_id') is not None
+    if not p.get('is_admin'):
+        row['survey_completed'] = bool(p.get('survey_completed'))
+    return row
+
+
+def admin_lobby_player_row(p):
+    """Admin dashboard player row in lobby (includes session_id and survey status)."""
+    ensure_survey_fields(p)
+    d = {
+        'name': p.get('display_name', p['name']),
+        'team': p['team'],
+        'is_admin': p['is_admin'],
+        'is_connected': p.get('socket_id') is not None,
+        'session_id': p['session_id'],
+    }
+    if not p.get('is_admin'):
+        d['survey_completed'] = bool(p.get('survey_completed'))
+    return d
+
+
+def admin_player_status_row_with_round(p):
+    """Gamemaster status row: lobby fields plus round prompts/selection/vote flags."""
+    ensure_survey_fields(p)
+    cr = game_state.get('current_round', 0)
+    st = game_state['status']
+    include_game_state = st != 'lobby' and cr > 0
+    row = {
+        **admin_lobby_player_row(p),
+        'prompts_submitted': len(p['images'].get(cr, [])) if include_game_state else 0,
+        'has_selected': (
+            (cr in p['selected_images'])
+            if include_game_state and st in ['voting', 'voting_images']
+            else None
+        ),
+        'has_voted': (
+            p['has_voted'].get(cr, False)
+            if include_game_state and st == 'voting_images'
+            else None
+        ),
+    }
+    return row
+
+
 def get_spud_plant_state(prompt_count, has_successful_prompt=False):
     """
     Determine plant state based on prompt count and whether any prompt was successful.
@@ -314,13 +383,7 @@ def handle_disconnect():
             # Update admin view with connection status
             if admin_session_id in players and players[admin_session_id].get('socket_id'):
                 socketio.emit('player_status_update', {
-                    'players': [{
-                        'name': p.get('display_name', p['name']),
-                        'team': p['team'],
-                        'is_admin': p['is_admin'],
-                        'is_connected': p.get('socket_id') is not None,
-                        'session_id': p['session_id']
-                    } for p in players.values()]
+                    'players': [admin_player_status_row_with_round(p) for p in players.values()]
                 }, room=players[admin_session_id]['socket_id'])
         print(f"Player {player['name']} disconnected")
 
@@ -347,6 +410,7 @@ def handle_join_game(data):
     # Check if player already exists (reconnection)
     if session_id in players:
         player = players[session_id]
+        ensure_survey_fields(player)
         player['socket_id'] = request.sid  # Update socket_id on reconnection
         
         # If reconnecting with admin code, check if we should become/remain admin
@@ -384,21 +448,8 @@ def handle_join_game(data):
         
         # Send reconnection update to admin
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
-            # Include game state fields if game is in progress
-            current_round = game_state.get('current_round', 0)
-            include_game_state = game_state['status'] != 'lobby' and current_round > 0
-            
             socketio.emit('player_status_update', {
-                'players': [{
-                    'name': p.get('display_name', p['name']),
-                    'team': p['team'],
-                    'is_admin': p['is_admin'],
-                    'is_connected': p.get('socket_id') is not None,
-                    'session_id': p['session_id'],
-                    'prompts_submitted': len(p['images'].get(current_round, [])) if include_game_state else 0,
-                    'has_selected': (current_round in p['selected_images']) if include_game_state and game_state['status'] in ['voting', 'voting_images'] else None,
-                    'has_voted': p['has_voted'].get(current_round, False) if include_game_state and game_state['status'] == 'voting_images' else None,
-                } for p in players.values()]
+                'players': [admin_player_status_row_with_round(p) for p in players.values()]
             }, room=players[admin_session_id]['socket_id'])
         
         # If game is in progress, restore player's game state
@@ -607,26 +658,22 @@ def handle_join_game(data):
         
         # Send lobby update if in lobby, otherwise skip (already sent game state above)
         if game_state['status'] == 'lobby':
-            lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+            lobby_players = [lobby_player_row(p) for p in players.values()]
             if player['is_admin']:
                 socketio.emit('admin_joined', {
                     'is_admin': True,
-                    'players': [{
-                        'name': p.get('display_name', p['name']),  # Use display_name consistently
-                        'team': p['team'],
-                        'is_admin': p['is_admin'],
-                        'is_connected': p.get('socket_id') is not None,
-                        'session_id': p['session_id']
-                    } for p in players.values()]
+                    'players': [admin_lobby_player_row(p) for p in players.values()]
                 }, room=player['socket_id'])
             else:
+                ensure_survey_fields(player)
                 socketio.emit('game_joined', {
                     'player': {
                         'name': player.get('display_name', player['name']),
                         'team': player['team'],
                         'character': player['character'],
                         'score': player['score'],
-                        'is_admin': player['is_admin']
+                        'is_admin': player['is_admin'],
+                        'survey_completed': bool(player.get('survey_completed')),
                     },
                     'game_state': {
                         'status': game_state['status'],
@@ -721,7 +768,11 @@ def handle_join_game(data):
             'conversation_history': {1: [], 2: [], 3: []},  # Round number -> conversation
             'current_image': {1: None, 2: None, 3: None},  # Current image for refinement per round
             'image_generation_errors': [],  # Track failed image generations
-            'is_admin': is_new_admin
+            'is_admin': is_new_admin,
+            'survey_completed': False,
+            'survey_proficiency': None,
+            'survey_frequency': None,
+            'survey_skills_text': None,
         }
         players[session_id] = player
 
@@ -731,29 +782,25 @@ def handle_join_game(data):
     lobby_players = None
     if game_state['status'] == 'lobby':
         # Use display_name for lobby (obscures admin code)
-        lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+        lobby_players = [lobby_player_row(p) for p in players.values()]
     
     # Send game state to player
     # Admin gets different view - they don't play
     if player['is_admin']:
         socketio.emit('admin_joined', {
             'is_admin': True,
-            'players': [{
-                'name': p.get('display_name', p['name']),  # Use display_name
-                'team': p['team'],
-                'is_admin': p['is_admin'],
-                'is_connected': p.get('socket_id') is not None,
-                'session_id': p['session_id']
-            } for p in players.values()]
+            'players': [admin_lobby_player_row(p) for p in players.values()]
         }, room=player['socket_id'])
     else:
+        ensure_survey_fields(player)
         socketio.emit('game_joined', {
             'player': {
                 'name': player.get('display_name', player['name']),  # Use display_name
                 'team': player['team'],
                 'character': player['character'],
                 'score': player['score'],
-                'is_admin': player['is_admin']
+                'is_admin': player['is_admin'],
+                'survey_completed': bool(player.get('survey_completed')),
             },
             'game_state': {
                 'status': game_state['status'],
@@ -768,6 +815,56 @@ def handle_join_game(data):
     if game_state['status'] == 'lobby' and lobby_players is not None:
         print(f"[LOBBY] Broadcasting lobby_players_update to all clients: {len(lobby_players)} players")
         socketio.emit('lobby_players_update', {'players': lobby_players})
+
+
+@socketio.on('submit_pre_survey')
+def handle_submit_pre_survey(data):
+    """Non-admin lobby players submit the three-question pre-survey once."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in players:
+        emit('error', {'message': 'Not in game'})
+        return
+    player = players[session_id]
+    ensure_survey_fields(player)
+    if player.get('is_admin'):
+        emit('error', {'message': 'Gamemaster does not complete this survey'})
+        return
+    if game_state['status'] != 'lobby':
+        emit('error', {'message': 'Survey is only available in the lobby'})
+        return
+    if player.get('survey_completed'):
+        emit('error', {'message': 'Survey already submitted'})
+        return
+    data = data or {}
+    prof = data.get('proficiency')
+    freq = data.get('frequency')
+    skills = (data.get('skills_text') or '').strip()
+    if prof not in VALID_SURVEY_PROFICIENCY or freq not in VALID_SURVEY_FREQUENCY:
+        emit('error', {'message': 'Please answer all multiple-choice questions'})
+        return
+    if len(skills) < 1:
+        emit('error', {'message': 'Please enter an answer for the open-ended question'})
+        return
+    if len(skills) > SURVEY_SKILLS_MAX_LEN:
+        emit('error', {'message': f'Answer is too long (max {SURVEY_SKILLS_MAX_LEN} characters)'})
+        return
+    player['survey_completed'] = True
+    player['survey_proficiency'] = prof
+    player['survey_frequency'] = freq
+    player['survey_skills_text'] = skills
+    if db.is_configured():
+        gid = game_state.get('game_id')
+        if gid:
+            db.update_player_pre_survey(gid, session_id, prof, freq, skills)
+        else:
+            db.save_pre_survey_pending(session_id, prof, freq, skills)
+    emit('survey_submitted', {'success': True})
+    lobby_players = [lobby_player_row(p) for p in players.values()]
+    socketio.emit('lobby_players_update', {'players': lobby_players})
+    if admin_session_id in players and players[admin_session_id].get('socket_id'):
+        socketio.emit('player_status_update', {
+            'players': [admin_player_status_row_with_round(p) for p in players.values()]
+        }, room=players[admin_session_id]['socket_id'])
 
 
 @socketio.on('admin_login')
@@ -844,22 +941,11 @@ def handle_admin_login(data):
     # Send admin view to this player
     socketio.emit('admin_joined', {
         'is_admin': True,
-        'players': [{
-            'name': p.get('display_name', p['name']),
-            'team': p['team'],
-            'is_admin': p['is_admin'],
-            'is_connected': p.get('socket_id') is not None,
-            'session_id': p['session_id']
-        } for p in players.values()]
+        'players': [admin_lobby_player_row(p) for p in players.values()]
     }, room=player['socket_id'])
 
     # Update lobby players for everyone (use display_name to hide code)
-    lobby_players = [{
-        'name': p.get('display_name', p['name']),
-        'team': p['team'],
-        'is_admin': p['is_admin'],
-        'is_connected': p.get('socket_id') is not None
-    } for p in players.values()]
+    lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
 
     # Also push an admin-specific player status update so the dashboard stays in sync
@@ -867,16 +953,7 @@ def handle_admin_login(data):
         admin_socket_id = players[admin_session_id]['socket_id']
         print(f"[LOBBY] Sending player_status_update to admin (socket_id: {admin_socket_id}): {len(players)} total players")
         socketio.emit('player_status_update', {
-            'players': [{
-                'name': p.get('display_name', p['name']),
-                'team': p['team'],
-                'is_admin': p['is_admin'],
-                'is_connected': p.get('socket_id') is not None,
-                'session_id': p['session_id'],
-                'prompts_submitted': len(p['images'].get(game_state.get('current_round', 0), [])) if game_state.get('current_round') else 0,
-                'has_selected': (game_state.get('current_round') in p['selected_images']) if game_state.get('current_round') else False,
-                'has_voted': p['has_voted'].get(game_state.get('current_round', 0), False) if game_state.get('current_round') else False,
-            } for p in players.values()]
+            'players': [admin_player_status_row_with_round(p) for p in players.values()]
         }, room=admin_socket_id)
 
     # If there was a previous connected admin, notify them they were replaced and are disconnected from the game
@@ -945,19 +1022,13 @@ def handle_assign_teams():
                 )
     
     # Broadcast updated lobby players
-    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'socket_id': p.get('socket_id') is not None} for p in players.values()]
+    lobby_players = [lobby_player_row(p, use_socket_id_key=True) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
     
     # Update admin dashboard to show new team assignments
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         # Send player status update (works in lobby and during game)
-        player_list = [{
-            'name': p.get('display_name', p['name']),
-            'team': p['team'],  # C_NA / C_HU / T_NA / T_HU after assignment
-            'is_admin': p['is_admin'],
-            'is_connected': p.get('socket_id') is not None,
-            'session_id': p['session_id']
-        } for p in players.values()]
+        player_list = [admin_player_status_row_with_round(p) for p in players.values()]
         print(f"[ASSIGN TEAMS] Sending player_status_update to admin with teams: {[(p['name'], p['team']) for p in player_list if not p['is_admin']]}")
         socketio.emit('player_status_update', {
             'players': player_list
@@ -2800,19 +2871,13 @@ def handle_clear_lobby():
             del players[sess_id]
     
     # Broadcast updated lobby
-    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+    lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
     
     # Update admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         socketio.emit('player_status_update', {
-            'players': [{
-                'name': p.get('display_name', p['name']),
-                'team': p['team'],
-                'is_admin': p['is_admin'],
-                'is_connected': p.get('socket_id') is not None,
-                'session_id': p['session_id']
-            } for p in players.values()]
+            'players': [admin_player_status_row_with_round(p) for p in players.values()]
         }, room=players[admin_session_id]['socket_id'])
     
     print(f"Lobby cleared by admin - removed {len(players_to_remove)} players")
@@ -2865,19 +2930,13 @@ def handle_remove_player(data):
     del players[target_session_id]
     
     # Broadcast updated lobby
-    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+    lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
     
     # Update admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         socketio.emit('player_status_update', {
-            'players': [{
-                'name': p.get('display_name', p['name']),
-                'team': p['team'],
-                'is_admin': p['is_admin'],
-                'is_connected': p.get('socket_id') is not None,
-                'session_id': p['session_id']
-            } for p in players.values()]
+            'players': [admin_player_status_row_with_round(p) for p in players.values()]
         }, room=players[admin_session_id]['socket_id'])
     
     print(f"Player {player_name} (session: {target_session_id}) removed by admin")
@@ -2930,19 +2989,13 @@ def handle_set_player_team(data):
         )
     
     # Broadcast updated lobby
-    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+    lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
     
     # Update admin view
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         socketio.emit('player_status_update', {
-            'players': [{
-                'name': p.get('display_name', p['name']),
-                'team': p['team'],
-                'is_admin': p['is_admin'],
-                'is_connected': p.get('socket_id') is not None,
-                'session_id': p['session_id']
-            } for p in players.values()]
+            'players': [admin_player_status_row_with_round(p) for p in players.values()]
         }, room=players[admin_session_id]['socket_id'])
     
     print(f"Admin set player {player.get('display_name', player['name'])} to team {team}")
@@ -2978,7 +3031,7 @@ def set_player_team_console(target_session_id: str, team: str):
         )
     
     # Broadcast updated lobby
-    lobby_players = [{'name': p.get('display_name', p['name']), 'team': p['team'], 'is_admin': p['is_admin'], 'is_connected': p.get('socket_id') is not None} for p in players.values()]
+    lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
     
     print(f"✅ Set player {player.get('display_name', player['name'])} to team {team}")

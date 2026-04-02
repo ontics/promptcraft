@@ -6,12 +6,14 @@ Copy this template when adding a new user story. Save it in this folder (Stories
 
 **Area** (where in the app this lives — pick one or list screens):  
 - [ ] Lobby  
+- [ ] Onboarding  
 - [ ] Prompting screen (game play)  
 - [ ] Transition screen  
 - [ ] Selection screen  
 - [ ] Voting screen  
 - [ ] Results / Winner screen  
 - [ ] Game over  
+- [ ] Post Survey  
 - [ ] Admin / gamemaster  
 - [ ] Other: _______________
 
