@@ -36,6 +36,7 @@ let gameState = {
 };
 
 let timerInterval;
+let allocationTimerInterval = null;
 
 function applyOnboardingGenerateState() {
     if (!gameState.inOnboarding || gameState.isAdmin) return;
@@ -1107,6 +1108,12 @@ socket.on('game_started', (data) => {
     const conversationArea = document.getElementById('conversation-area');
     conversationArea.innerHTML = '<p class="empty-conversation">Start generating images by typing a prompt below</p>';
 
+    const aggPanel = document.getElementById('aggregate-heuristics-panel');
+    if (aggPanel) {
+        aggPanel.style.display = 'none';
+        aggPanel.innerHTML = '';
+    }
+
     // Set up initial avatar state based on character data from server
     if (data.character) {
         updateAvatarState(data.character);
@@ -1477,9 +1484,33 @@ socket.on('image_generated', (data) => {
     
     if (imageContainers.length > 0) {
         const lastContainer = imageContainers[imageContainers.length - 1];
-        // Prefer image_url over image_data to reduce memory usage
         const imageSrc = data.image_url || data.image_data || '';
-        lastContainer.innerHTML = `<img src="${imageSrc}" alt="Generated image" class="image-result">`;
+        let imgHtml = `<img src="${imageSrc}" alt="Generated image" class="image-result">`;
+        if (data.show_prompting_heuristics && Array.isArray(data.per_image_heuristic_display) && data.per_image_heuristic_display.length) {
+            const lines = data.per_image_heuristic_display.map((h) => {
+                const lab = (h.label || '').replace(/</g, '&lt;');
+                const val = (h.value || '').replace(/</g, '&lt;');
+                return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
+            }).join('');
+            imgHtml = `<div class="gen-img-row"><div class="gen-img-cell">${imgHtml}</div><div class="heuristic-box">${lines}</div></div>`;
+        }
+        lastContainer.innerHTML = imgHtml;
+    }
+
+    const aggPanel = document.getElementById('aggregate-heuristics-panel');
+    if (aggPanel) {
+        if (data.show_prompting_heuristics && Array.isArray(data.aggregate_heuristic_display) && data.aggregate_heuristic_display.length) {
+            aggPanel.style.display = 'block';
+            const lines = data.aggregate_heuristic_display.map((h) => {
+                const lab = (h.label || '').replace(/</g, '&lt;');
+                const val = (h.value || '').replace(/</g, '&lt;');
+                return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
+            }).join('');
+            aggPanel.innerHTML = `<h4 class="aggregate-heuristics-title">Your round totals</h4>${lines}`;
+        } else {
+            aggPanel.style.display = 'none';
+            aggPanel.innerHTML = '';
+        }
     }
     
     // Note: Error messages are handled separately via 'image_generation_error' event
@@ -1638,7 +1669,7 @@ socket.on('voting_started', (data) => {
         console.log('[CLIENT] Admin user, ignoring voting_started');
         return;
     }
-    
+    clearRoundTimerIfAny();
     console.log('[CLIENT] Showing selection screen');
     
     // Mark that we're in selection phase (for late-arriving images)
@@ -1725,7 +1756,7 @@ socket.on('voting_started', (data) => {
 
     // Start selection timer
     // Use synchronized start time from server for timer synchronization
-    startSelectionTimer(data.duration || 30, data.start_time);
+    startSelectionTimer(data.duration || 90, data.start_time);
 });
 
 socket.on('selection_waiting', (data) => {
@@ -1958,6 +1989,124 @@ socket.on('vote_on_images', (data) => {
     }
 });
 
+function clearAllocationTimer() {
+    if (allocationTimerInterval) {
+        clearInterval(allocationTimerInterval);
+        allocationTimerInterval = null;
+    }
+}
+
+function startAllocationTimer(duration, startTime) {
+    const timerEl = document.getElementById('allocation-timer');
+    if (!timerEl) return;
+    clearAllocationTimer();
+    const serverStart = startTime || (Date.now() / 1000);
+    const tick = () => {
+        const elapsed = Date.now() / 1000 - serverStart;
+        const left = Math.max(0, Math.floor(duration - elapsed));
+        const m = Math.floor(left / 60);
+        const s = left % 60;
+        timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
+        if (left <= 0) {
+            clearAllocationTimer();
+            socket.emit('round_timer_check');
+        }
+    };
+    tick();
+    allocationTimerInterval = setInterval(tick, 500);
+}
+
+function updateAllocationPointsStatus(a, b, c) {
+    const el = document.getElementById('allocation-points-status');
+    if (!el) return;
+    const total = (parseInt(a, 10) || 0) + (parseInt(b, 10) || 0) + (parseInt(c, 10) || 0);
+    if (total < 100) {
+        el.textContent = `${100 - total} points left`;
+    } else if (total === 100) {
+        el.textContent = 'All 100 points assigned';
+    } else {
+        el.textContent = `${total - 100} points over 100`;
+    }
+}
+
+socket.on('allocation_vote_started', (data) => {
+    if (gameState.isAdmin) return;
+    clearRoundTimerIfAny();
+    clearAllocationTimer();
+    showScreen('voting');
+    const nameEl = document.getElementById('allocation-player-display-name');
+    if (nameEl) nameEl.textContent = gameState.playerName || '';
+    const rn = document.getElementById('allocation-round-num');
+    const rt = document.getElementById('allocation-round-total');
+    if (rn) rn.textContent = String(data.voting_round_index || 1);
+    if (rt) rt.textContent = String(data.total_voting_rounds || 10);
+    const tgt = document.getElementById('voting-target-image');
+    if (tgt && data.target_image_url) {
+        tgt.src = data.target_image_url;
+    }
+    const slots = document.getElementById('allocation-slots');
+    if (!slots) return;
+    slots.innerHTML = '';
+    const opts = data.options || [];
+    opts.forEach((opt, idx) => {
+        const col = document.createElement('div');
+        col.className = 'allocation-slot';
+        const imgUrl = opt.image_url || '';
+        let heurHtml = '';
+        if (data.show_voting_heuristics && Array.isArray(opt.heuristic_display) && opt.heuristic_display.length) {
+            heurHtml = '<div class="heuristic-box voting-heur">' + opt.heuristic_display.map((h) => {
+                const lab = (h.label || '').replace(/</g, '&lt;');
+                const val = (h.value || '').replace(/</g, '&lt;');
+                return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
+            }).join('') + '</div>';
+        }
+        col.innerHTML = `
+            <div class="allocation-slot-img-wrap"><img src="${imgUrl}" alt="Option ${idx + 1}" class="allocation-opt-img"></div>
+            ${heurHtml}
+            <label class="allocation-pts-label">Points</label>
+            <input type="number" min="0" max="100" step="1" class="allocation-pts-input" data-slot="${idx}" value="0">
+        `;
+        slots.appendChild(col);
+    });
+    const inputs = slots.querySelectorAll('.allocation-pts-input');
+    const sync = () => {
+        const v = [0, 1, 2].map((i) => {
+            const inp = slots.querySelector(`.allocation-pts-input[data-slot="${i}"]`);
+            return inp ? inp.value : '0';
+        });
+        updateAllocationPointsStatus(v[0], v[1], v[2]);
+        const t = (parseInt(v[0], 10) || 0) + (parseInt(v[1], 10) || 0) + (parseInt(v[2], 10) || 0);
+        const btn = document.getElementById('confirm-allocation-btn');
+        if (btn) btn.disabled = t !== 100;
+    };
+    inputs.forEach((inp) => inp.addEventListener('input', sync));
+    sync();
+    const btn = document.getElementById('confirm-allocation-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Submit points';
+        btn.onclick = () => {
+            const v = [0, 1, 2].map((i) => {
+                const inp = slots.querySelector(`.allocation-pts-input[data-slot="${i}"]`);
+                return parseInt(inp && inp.value, 10) || 0;
+            });
+            if (v[0] + v[1] + v[2] !== 100) return;
+            socket.emit('submit_point_allocation', {
+                points_slot_1: v[0],
+                points_slot_2: v[1],
+                points_slot_3: v[2],
+            });
+            btn.disabled = true;
+            btn.textContent = 'Submitted';
+        };
+    }
+    startAllocationTimer(data.duration || 120, data.start_time);
+});
+
+socket.on('allocation_saved', () => {
+    /* optional toast */
+});
+
 socket.on('vote_cast', (data) => {
     if (data.success) {
         addSystemMessage('Vote cast successfully!');
@@ -2026,10 +2175,29 @@ socket.on('game_over', (data) => {
     if (gameState.isAdmin) {
         return;
     }
-    
+    clearAllocationTimer();
     showScreen('gameover');
 
     const finalResults = document.getElementById('final-results');
+    if (data.experiment) {
+        finalResults.innerHTML = '<h2>Game results</h2>';
+        (data.results || []).forEach((result) => {
+            const item = document.createElement('div');
+            item.className = 'final-result-item experiment-rank';
+            const r = result.rank || 1;
+            let badge = String(r);
+            if (r === 1) badge = '🥇';
+            else if (r === 2) badge = '🥈';
+            else if (r === 3) badge = '🥉';
+            item.innerHTML = `
+                <div class="result-rank">${badge}</div>
+                <div class="result-info"><h3>${result.player_name}</h3></div>
+            `;
+            finalResults.appendChild(item);
+        });
+        return;
+    }
+
     finalResults.innerHTML = '<h2>Final Standings</h2>';
 
     data.results.forEach((result, index) => {

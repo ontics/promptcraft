@@ -7,7 +7,7 @@ import base64
 import threading
 from datetime import datetime
 from supabase import create_client, Client
-from typing import Optional, Dict
+from typing import Any, List, Optional, Dict
 import io
 from PIL import Image
 
@@ -218,24 +218,31 @@ def create_player(game_id: int, player_id: str, player_name: str, team: Optional
         # Check if player already exists
         existing = supabase.table('players').select('player_id').eq('player_id', player_id).execute()
         
+        study_group = team if team in ('C_NA', 'C_HU', 'T_NA', 'T_HU') else None
         if existing.data:
             # Update existing player
-            supabase.table('players').update({
+            row = {
                 'game_id': game_id,
                 'player_name': player_name,
                 'team': team,
-                'character': character
-            }).eq('player_id', player_id).execute()
+                'character': character,
+            }
+            if study_group is not None:
+                row['study_group'] = study_group
+            supabase.table('players').update(row).eq('player_id', player_id).execute()
         else:
             # Create new player
-            supabase.table('players').insert({
+            ins = {
                 'player_id': player_id,
                 'game_id': game_id,
                 'player_name': player_name,
                 'team': team,
                 'character': character,
-                'joined_at': datetime.utcnow().isoformat()
-            }).execute()
+                'joined_at': datetime.utcnow().isoformat(),
+            }
+            if study_group is not None:
+                ins['study_group'] = study_group
+            supabase.table('players').insert(ins).execute()
         
         _game_id_cache[player_id] = game_id
         print(f"✅ Created/updated player: {player_id} ({player_name})")
@@ -283,7 +290,9 @@ def save_prompt_sync(game_id: int, round_id: int, player_id: str, prompt_index: 
                      error_message: Optional[str] = None,
                      finish_reason: Optional[str] = None,
                      file_size_kb: Optional[float] = None,
-                     safety_ratings: Optional[dict] = None) -> Optional[int]:
+                     safety_ratings: Optional[dict] = None,
+                     word_count: Optional[int] = None,
+                     perplexity_normalized: Optional[float] = None) -> Optional[int]:
     """
     Save a prompt and image to the database (synchronous).
     Returns prompt_id if successful, None otherwise.
@@ -320,6 +329,10 @@ def save_prompt_sync(game_id: int, round_id: int, player_id: str, prompt_index: 
             data['file_size_kb'] = file_size_kb
         if safety_ratings:
             data['safety_ratings'] = safety_ratings
+        if word_count is not None:
+            data['word_count'] = word_count
+        if perplexity_normalized is not None:
+            data['perplexity_normalized'] = perplexity_normalized
         
         result = supabase.table('prompts').insert(data).execute()
         
@@ -346,22 +359,37 @@ def update_prompt_image_url(prompt_id: int, image_url: str):
         print(f"❌ Error updating prompt image URL: {e}")
 
 
-def save_image_selection(player_id: str, round_id: int, game_id: int, prompt_id: int):
+def save_image_selection(
+    player_id: str,
+    round_id: int,
+    game_id: int,
+    prompt_id: int,
+    prompt_index_at_selection: Optional[int] = None,
+    cumulative_word_count: Optional[int] = None,
+    perplexity_normalized_at_selection: Optional[float] = None,
+    heuristic_snapshot: Optional[dict] = None,
+):
     """Save a player's image selection. Uses upsert to handle duplicate selections gracefully."""
     if not is_configured() or not game_id or not round_id:
         return
     
     try:
-        # Use upsert to handle cases where selection already exists (retries, reconnections, etc.)
-        # The unique constraint on (player_id, round_id) will cause upsert to update if exists, insert if not
-        # Supabase Python client automatically detects unique constraints for conflict resolution
-        supabase.table('image_selections').upsert({
+        row = {
             'player_id': player_id,
             'round_id': round_id,
             'game_id': game_id,
             'prompt_id': prompt_id,
-            'selected_at': datetime.utcnow().isoformat()
-        }).execute()
+            'selected_at': datetime.utcnow().isoformat(),
+        }
+        if prompt_index_at_selection is not None:
+            row['prompt_index_at_selection'] = prompt_index_at_selection
+        if cumulative_word_count is not None:
+            row['cumulative_word_count'] = cumulative_word_count
+        if perplexity_normalized_at_selection is not None:
+            row['perplexity_normalized_at_selection'] = perplexity_normalized_at_selection
+        if heuristic_snapshot is not None:
+            row['heuristic_snapshot'] = heuristic_snapshot
+        supabase.table('image_selections').upsert(row).execute()
         print(f"✅ Saved image selection: player={player_id}, prompt_id={prompt_id}")
     except Exception as e:
         print(f"❌ Error saving image selection: {e}")
@@ -369,10 +397,9 @@ def save_image_selection(player_id: str, round_id: int, game_id: int, prompt_id:
 
 def save_vote(voter_id: str, voted_for_player_id: str, voted_for_prompt_id: int, 
               round_id: int, game_id: int):
-    """Save a vote."""
+    """Deprecated: single-vote model. New experiment uses save_point_allocation."""
     if not is_configured() or not game_id or not round_id:
         return
-    
     try:
         supabase.table('votes').insert({
             'voter_id': voter_id,
@@ -385,6 +412,120 @@ def save_vote(voter_id: str, voted_for_player_id: str, voted_for_prompt_id: int,
         print(f"✅ Saved vote: voter={voter_id}, voted_for_prompt={voted_for_prompt_id}")
     except Exception as e:
         print(f"❌ Error saving vote: {e}")
+
+
+def create_voting_round_row(
+    game_id: int,
+    voting_round_index: int,
+    kind: str,
+    fixture_set_key: Optional[str],
+    target_image_url: Optional[str],
+) -> Optional[int]:
+    if not is_configured() or not game_id:
+        return None
+    try:
+        result = supabase.table('voting_rounds').insert({
+            'game_id': game_id,
+            'voting_round_index': voting_round_index,
+            'kind': kind,
+            'fixture_set_key': fixture_set_key,
+            'target_image_url': target_image_url,
+            'started_at': datetime.utcnow().isoformat(),
+        }).execute()
+        if result.data:
+            rid = result.data[0]['voting_round_id']
+            print(f"✅ voting_rounds row voting_round_id={rid} index={voting_round_index}")
+            return rid
+    except Exception as e:
+        print(f"❌ Error creating voting_round: {e}")
+    return None
+
+
+def end_voting_round_row(voting_round_id: int) -> None:
+    if not is_configured() or not voting_round_id:
+        return
+    try:
+        supabase.table('voting_rounds').update({
+            'ended_at': datetime.utcnow().isoformat(),
+        }).eq('voting_round_id', voting_round_id).execute()
+    except Exception as e:
+        print(f"❌ Error ending voting_round: {e}")
+
+
+def create_ballot_with_options(
+    game_id: int,
+    voting_round_id: int,
+    voter_player_id: str,
+    options: List[Dict[str, Any]],
+) -> Optional[int]:
+    """
+    options: three dicts with keys slot_index (1-3), source ('fixture'|'player_submission'),
+    fixture_image_id (optional), image_url, owner_player_id (optional), prompt_id (optional),
+    heuristic_snapshot (optional dict).
+    """
+    if not is_configured() or not game_id or not voting_round_id:
+        return None
+    try:
+        br = supabase.table('voter_ballots').insert({
+            'game_id': game_id,
+            'voting_round_id': voting_round_id,
+            'voter_player_id': voter_player_id,
+        }).execute()
+        if not br.data:
+            return None
+        ballot_id = br.data[0]['ballot_id']
+        for opt in options:
+            row = {
+                'ballot_id': ballot_id,
+                'slot_index': opt['slot_index'],
+                'source': opt['source'],
+                'image_url': opt['image_url'],
+            }
+            if opt.get('fixture_image_id') is not None:
+                row['fixture_image_id'] = opt['fixture_image_id']
+            if opt.get('owner_player_id') is not None:
+                row['owner_player_id'] = opt['owner_player_id']
+            if opt.get('prompt_id') is not None:
+                row['prompt_id'] = opt['prompt_id']
+            if opt.get('heuristic_snapshot') is not None:
+                row['heuristic_snapshot'] = opt['heuristic_snapshot']
+            supabase.table('ballot_options').insert(row).execute()
+        print(f"✅ ballot_id={ballot_id} voter={voter_player_id[:8]}...")
+        return ballot_id
+    except Exception as e:
+        print(f"❌ Error creating ballot/options: {e}")
+    return None
+
+
+def save_point_allocation(
+    ballot_id: int,
+    game_id: int,
+    voting_round_id: int,
+    voter_player_id: str,
+    points_slot_1: int,
+    points_slot_2: int,
+    points_slot_3: int,
+) -> bool:
+    if not is_configured() or not ballot_id:
+        return False
+    if points_slot_1 + points_slot_2 + points_slot_3 != 100:
+        return False
+    try:
+        supabase.table('point_allocations').insert({
+            'ballot_id': ballot_id,
+            'game_id': game_id,
+            'voting_round_id': voting_round_id,
+            'voter_player_id': voter_player_id,
+            'points_slot_1': points_slot_1,
+            'points_slot_2': points_slot_2,
+            'points_slot_3': points_slot_3,
+            'submitted_at': datetime.utcnow().isoformat(),
+        }).execute()
+        print(f"✅ point_allocation ballot={ballot_id} voter={voter_player_id[:8]}... {points_slot_1}/{points_slot_2}/{points_slot_3}")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving point_allocation: {e}")
+    return False
 
 
 def upload_image_async(image_data: str, game_id: int, player_id: str, round_id: int, 

@@ -34,3 +34,4 @@ static/generated/
 features/
 test_db_connection.py
 *.sql
+!sql/experiment_voting_schema.sql
