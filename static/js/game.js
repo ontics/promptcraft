@@ -31,14 +31,26 @@ let gameState = {
     inSelectionPhase: false,  // Track if we're in the selection phase (for late-arriving images)
     surveyCompleted: false,
     inOnboarding: false,
+    onboardingPhase: 'prompting', // 'prompting' | 'practice_voting' while inOnboarding
     onboardingMaxPrompts: 3,
-    onboardingPromptCount: 0
+    onboardingPromptCount: 0,
+    /** Live play only: show bullet slots under images when server sets image_context_bullets (never during onboarding). */
+    imageContextBulletsEnabled: false,
 };
 
 let timerInterval;
 
+function syncImageContextBulletsVisibility() {
+    const enabled = Boolean(gameState.imageContextBulletsEnabled) && !gameState.inOnboarding;
+    document.body.classList.toggle('image-context-bullets-enabled', enabled);
+    document.querySelectorAll('.gameplay-image-context-bullets').forEach((el) => {
+        el.setAttribute('aria-hidden', enabled ? 'false' : 'true');
+    });
+}
+
 function applyOnboardingGenerateState() {
     if (!gameState.inOnboarding || gameState.isAdmin) return;
+    if (gameState.onboardingPhase === 'practice_voting') return;
     const max = gameState.onboardingMaxPrompts || 3;
     const btn = document.getElementById('generate-btn');
     const input = document.getElementById('prompt-input');
@@ -115,12 +127,174 @@ function setOnboardingInstructionsPanelVisible(visible) {
 const screens = {
     lobby: document.getElementById('lobby-screen'),
     game: document.getElementById('game-screen'),
+    onboardingPracticeVoting: document.getElementById('onboarding-practice-voting-screen'),
     transition: document.getElementById('transition-screen'),
     selection: document.getElementById('selection-screen'),
     voting: document.getElementById('voting-screen'),
     results: document.getElementById('results-screen'),
     gameover: document.getElementById('gameover-screen')
 };
+
+/** Gamemaster Round Controls: full buttons for live play; onboarding prompting shows End Round only. */
+function setAdminRoundControlsForContext() {
+    const grp = document.getElementById('admin-game-controls');
+    const endBtn = document.getElementById('admin-end-round-btn');
+    const skipBtn = document.getElementById('admin-skip-voting-btn');
+    const nextBtn = document.getElementById('admin-next-round-btn');
+    if (!endBtn || !skipBtn || !nextBtn) return;
+
+    if (gameState.isAdmin && gameState.inOnboarding) {
+        if (grp) grp.style.display = 'block';
+        if (gameState.onboardingPhase === 'prompting') {
+            endBtn.style.display = '';
+            endBtn.textContent = 'End Round Early';
+            skipBtn.style.display = 'none';
+            nextBtn.style.display = 'none';
+        } else {
+            endBtn.style.display = 'none';
+            skipBtn.style.display = 'none';
+            nextBtn.style.display = 'none';
+        }
+    } else if (gameState.isAdmin) {
+        endBtn.style.display = '';
+        endBtn.textContent = 'End Round Early';
+        skipBtn.style.display = '';
+        nextBtn.style.display = '';
+    }
+}
+
+let obPracticeInputListenersBound = false;
+
+function getObPracticeValues() {
+    const out = [];
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById(`ob-practice-pts-${i}`);
+        const raw = el && el.value !== '' ? el.value : '0';
+        const n = parseInt(raw, 10);
+        out.push(Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : 0);
+    }
+    return out;
+}
+
+function formatObPracticePointsRemaining(left) {
+    const n = Math.max(0, Math.min(100, left));
+    return n === 1 ? '1 point remaining' : `${n} points remaining`;
+}
+
+function syncObPracticeRemaining(editedIndex) {
+    let vals = getObPracticeValues();
+    let sum = vals[0] + vals[1] + vals[2];
+    if (sum > 100 && editedIndex >= 0 && editedIndex <= 2) {
+        const overflow = sum - 100;
+        vals[editedIndex] = Math.max(0, vals[editedIndex] - overflow);
+        const el = document.getElementById(`ob-practice-pts-${editedIndex + 1}`);
+        if (el) el.value = String(vals[editedIndex]);
+        sum = vals[0] + vals[1] + vals[2];
+    }
+    const left = 100 - sum;
+    const titleRem = document.getElementById('ob-practice-title-remaining');
+    if (titleRem) {
+        titleRem.textContent = formatObPracticePointsRemaining(left);
+    }
+    const rem = document.getElementById('ob-practice-points-remaining');
+    if (rem) {
+        rem.textContent = formatObPracticePointsRemaining(left);
+    }
+    const btn = document.getElementById('ob-practice-submit-btn');
+    if (btn && btn.dataset.submitted !== '1') {
+        btn.disabled = sum !== 100;
+    }
+}
+
+function resetObPracticeVotingForm() {
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById(`ob-practice-pts-${i}`);
+        if (el) {
+            el.value = '0';
+            el.disabled = false;
+        }
+    }
+    const err = document.getElementById('ob-practice-vote-error');
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    const done = document.getElementById('ob-practice-vote-done');
+    if (done) done.style.display = 'none';
+    const submit = document.getElementById('ob-practice-submit-btn');
+    if (submit) {
+        submit.disabled = true;
+        submit.style.display = '';
+        delete submit.dataset.submitted;
+    }
+    syncObPracticeRemaining(0);
+}
+
+function applyObPracticeSubmittedState(points) {
+    const submit = document.getElementById('ob-practice-submit-btn');
+    if (submit) {
+        submit.style.display = 'none';
+        submit.dataset.submitted = '1';
+    }
+    for (let i = 0; i < 3; i++) {
+        const el = document.getElementById(`ob-practice-pts-${i + 1}`);
+        if (el) {
+            el.value = String(points[i] != null ? points[i] : 0);
+            el.disabled = true;
+        }
+    }
+    syncObPracticeRemaining(0);
+    const done = document.getElementById('ob-practice-vote-done');
+    if (done) done.style.display = 'block';
+}
+
+function initOnboardingPracticeVotingListeners() {
+    if (obPracticeInputListenersBound) return;
+    obPracticeInputListenersBound = true;
+    for (let i = 1; i <= 3; i++) {
+        const idx = i - 1;
+        document.getElementById(`ob-practice-pts-${i}`)?.addEventListener('input', () => {
+            syncObPracticeRemaining(idx);
+        });
+    }
+    document.getElementById('ob-practice-submit-btn')?.addEventListener('click', () => {
+        const vals = getObPracticeValues();
+        const err = document.getElementById('ob-practice-vote-error');
+        if (vals[0] + vals[1] + vals[2] !== 100) {
+            if (err) {
+                err.textContent = 'Assign exactly 100 points across the three images.';
+                err.style.display = 'block';
+            }
+            return;
+        }
+        if (err) err.style.display = 'none';
+        socket.emit('submit_onboarding_practice_points', { points: vals });
+    });
+}
+
+function showOnboardingPracticeVotingFromPayload(data) {
+    initOnboardingPracticeVotingListeners();
+    gameState.imageContextBulletsEnabled = false;
+    gameState.inOnboarding = true;
+    gameState.onboardingPhase = 'practice_voting';
+
+    /* Option images are hard-coded in index.html (same order for every player). */
+    const img = document.getElementById('ob-practice-target-img');
+    if (img && data.target && data.target.url) {
+        img.src = data.target.url;
+        img.alt = 'Practice target';
+    }
+
+    if (data.already_submitted && Array.isArray(data.existing_points) && data.existing_points.length === 3) {
+        resetObPracticeVotingForm();
+        applyObPracticeSubmittedState(data.existing_points);
+    } else {
+        resetObPracticeVotingForm();
+    }
+
+    syncImageContextBulletsVisibility();
+    showScreen('onboardingPracticeVoting');
+}
 
 // Avatar images are embedded inline — no preloading or HTTP requests needed.
 
@@ -232,8 +406,11 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 // Utility function to show screen
 function showScreen(screenName) {
-    Object.values(screens).forEach(screen => screen.classList.remove('active'));
-    screens[screenName].classList.add('active');
+    Object.values(screens).forEach((screen) => {
+        if (screen) screen.classList.remove('active');
+    });
+    const next = screens[screenName];
+    if (next) next.classList.add('active');
     if (screenName === 'lobby') {
         showLobbySurveyForPlayer();
     }
@@ -448,6 +625,7 @@ socket.on('admin_joined', (data) => {
     gameState.isAdmin = true;
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
 
     // Show admin screen in lobby
     const adminScreen = document.getElementById('admin-screen');
@@ -497,6 +675,7 @@ socket.on('admin_game_started', (data) => {
     if (adminGameControls) {
         adminGameControls.style.display = 'block';
     }
+    setAdminRoundControlsForContext();
     
     // Update admin status (no target description - removed)
     document.getElementById('admin-round').textContent = data.round;
@@ -526,6 +705,7 @@ socket.on('admin_game_started', (data) => {
 
 socket.on('admin_onboarding_started', (data) => {
     gameState.inOnboarding = true;
+    gameState.onboardingPhase = data.onboarding_phase === 'practice_voting' ? 'practice_voting' : 'prompting';
     gameState.currentRound = 0;
     gameState.roundEndTime = null;
     if (adminTimerInterval) {
@@ -537,18 +717,31 @@ socket.on('admin_onboarding_started', (data) => {
     if (adminScreen) adminScreen.style.display = 'block';
 
     const adminGameControls = document.getElementById('admin-game-controls');
-    if (adminGameControls) adminGameControls.style.display = 'none';
+    if (adminGameControls) adminGameControls.style.display = 'block';
+    setAdminRoundControlsForContext();
 
     const timeEl = document.getElementById('admin-time-remaining');
     if (timeEl) timeEl.textContent = '5:00';
 
     document.getElementById('admin-round').textContent = '—';
-    document.getElementById('admin-status').textContent = 'Onboarding (practice)';
+    document.getElementById('admin-status').textContent =
+        gameState.onboardingPhase === 'practice_voting'
+            ? 'Onboarding (practice voting)'
+            : 'Onboarding (practice)';
     document.getElementById('admin-target').textContent = 'Practice target';
 
     if (data.players) {
         updateAdminPlayerList(data.players);
     }
+});
+
+socket.on('admin_onboarding_practice_voting', () => {
+    if (!gameState.isAdmin) return;
+    gameState.inOnboarding = true;
+    gameState.onboardingPhase = 'practice_voting';
+    setAdminRoundControlsForContext();
+    const st = document.getElementById('admin-status');
+    if (st) st.textContent = 'Onboarding (practice voting)';
 });
 
 socket.on('admin_voting_started', (data) => {
@@ -559,6 +752,9 @@ socket.on('admin_voting_started', (data) => {
     if (adminScreen) {
         adminScreen.style.display = 'block';
     }
+    gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
+    setAdminRoundControlsForContext();
     
     // Store voting start time and duration for client-side calculation
     if (data.voting_start_time && data.voting_duration) {
@@ -756,6 +952,7 @@ function updateAdminPlayerList(players) {
         const nonAdmin = players.filter((p) => !p.is_admin);
         if (nonAdmin.length === 0) {
             gameState.inOnboarding = false;
+            gameState.onboardingPhase = 'prompting';
             const timeEl = document.getElementById('admin-time-remaining');
             if (timeEl) timeEl.textContent = '-';
             const st = document.getElementById('admin-status');
@@ -900,6 +1097,9 @@ function updateAdminPlayerList(players) {
         if (!player.is_admin) {
             if (isInLobby) {
                 phaseBadge = `<br><small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
+            } else if (gameState.inOnboarding && gameState.onboardingPhase === 'practice_voting') {
+                const pv = player.practice_vote_submitted === true;
+                phaseBadge = `<br><small style="color: #1864ab; font-weight: 600;">${pv ? '✓ Practice points submitted' : 'Practice voting'}</small>`;
             } else if (gameState.inOnboarding) {
                 phaseBadge = '<br><small style="color: #1864ab; font-weight: 600;">Practice (onboarding)</small>';
             } else if (!selectionStatus && !voteStatus) {
@@ -948,7 +1148,11 @@ function updateAdminPlayerList(players) {
 
 // Admin control button handlers
 document.getElementById('admin-end-round-btn')?.addEventListener('click', () => {
-    if (confirm('End the current round early and move to image selection?')) {
+    const msg =
+        gameState.inOnboarding && gameState.onboardingPhase === 'prompting'
+            ? 'End practice prompting and open practice point distribution (100 points across three images)?'
+            : 'End the current round early and move to image selection?';
+    if (confirm(msg)) {
         socket.emit('admin_end_round');
     }
 });
@@ -1017,7 +1221,9 @@ function updatePlayerList(players) {
 socket.on('onboarding_started', (data) => {
     if (gameState.isAdmin) return;
 
+    gameState.imageContextBulletsEnabled = false;
     gameState.inOnboarding = true;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingMaxPrompts = data.max_prompts || 3;
     gameState.onboardingPromptCount = 0;
     gameState.currentRound = 1;
@@ -1053,7 +1259,19 @@ socket.on('onboarding_started', (data) => {
     }
 
     applyOnboardingGenerateState();
+    syncImageContextBulletsVisibility();
     showScreen('game');
+});
+
+socket.on('onboarding_practice_voting_started', (data) => {
+    if (gameState.isAdmin) return;
+    showOnboardingPracticeVotingFromPayload(data);
+});
+
+socket.on('onboarding_practice_points_saved', () => {
+    if (gameState.isAdmin) return;
+    const vals = getObPracticeValues();
+    applyObPracticeSubmittedState(vals);
 });
 
 socket.on('game_started', (data) => {
@@ -1063,6 +1281,7 @@ socket.on('game_started', (data) => {
     }
 
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
     const obHint = document.getElementById('onboarding-limit-hint');
@@ -1083,6 +1302,8 @@ socket.on('game_started', (data) => {
 
     // Reset selection phase flag for new round
     gameState.inSelectionPhase = false;
+
+    gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
     
     gameState.currentRound = data.round;
     gameState.generatedImages = [];
@@ -1156,6 +1377,7 @@ socket.on('game_started', (data) => {
     setupCharacterAvatar();
     }
 
+    syncImageContextBulletsVisibility();
     showScreen('game');
 
     // Start timer
@@ -1570,6 +1792,9 @@ function addImageToSelectionGallery(imgData, index) {
         const imageSrc = imgData.image_url || imgData.image_data || '';
         item.innerHTML = `
             <img src="${imageSrc}" alt="Generated image" ${imgData.prompt_id ? `data-prompt-id="${imgData.prompt_id}"` : ''}>
+            <div class="image-context-bullets gameplay-image-context-bullets" aria-hidden="true">
+                <ul class="image-context-bullets-list"></ul>
+            </div>
         `;
 
         item.addEventListener('click', () => {
@@ -1590,6 +1815,7 @@ function addImageToSelectionGallery(imgData, index) {
         });
 
         gallery.appendChild(item);
+        syncImageContextBulletsVisibility();
 }
 
 socket.on('image_url_updated', (data) => {
@@ -1639,6 +1865,8 @@ socket.on('voting_started', (data) => {
         console.log('[CLIENT] Admin user, ignoring voting_started');
         return;
     }
+
+    gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
     
     console.log('[CLIENT] Showing selection screen');
     
@@ -1682,6 +1910,7 @@ socket.on('voting_started', (data) => {
             }
         });
     }
+    syncImageContextBulletsVisibility();
 
     // Always show default selection UI (green border on last valid image)
     // This is UI-only - the server won't submit it until timer expires or player confirms
@@ -1863,6 +2092,8 @@ socket.on('vote_on_images', (data) => {
     if (gameState.isAdmin) {
         return;
     }
+
+    gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
     
     showScreen('voting');
 
@@ -1885,7 +2116,10 @@ socket.on('vote_on_images', (data) => {
     }
 
     const gallery = document.getElementById('voting-gallery');
-    if (!gallery) return;
+    if (!gallery) {
+        syncImageContextBulletsVisibility();
+        return;
+    }
     
     gallery.innerHTML = '';
 
@@ -1895,6 +2129,7 @@ socket.on('vote_on_images', (data) => {
 
     if (otherPlayerImages.length === 0) {
         gallery.innerHTML = '<p>No other players to vote for!</p>';
+        syncImageContextBulletsVisibility();
         return;
     }
 
@@ -1916,6 +2151,9 @@ socket.on('vote_on_images', (data) => {
         const imageSrc = item.image.image_url || item.image.image_data || '';
         votingItem.innerHTML = `
             <img src="${imageSrc}" alt="Submission image">
+            <div class="image-context-bullets gameplay-image-context-bullets" aria-hidden="true">
+                <ul class="image-context-bullets-list"></ul>
+            </div>
         `;
 
         votingItem.addEventListener('click', () => {
@@ -1934,6 +2172,8 @@ socket.on('vote_on_images', (data) => {
 
         gallery.appendChild(votingItem);
     });
+
+    syncImageContextBulletsVisibility();
     
     // Add confirm vote button handler (using existing confirmVoteBtn variable)
     if (confirmVoteBtn) {
@@ -2067,6 +2307,7 @@ socket.on('game_restarted', (data) => {
     // Reset state
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
     gameState.selectedImageIndex = null;
@@ -2085,10 +2326,14 @@ socket.on('game_restarted_kick', (data) => {
     showScreen('lobby');
     
     // Clear all game state
+    gameState.imageContextBulletsEnabled = false;
+    syncImageContextBulletsVisibility();
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
+    resetObPracticeVotingForm();
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
@@ -2126,7 +2371,17 @@ socket.on('game_restarted_kick', (data) => {
 socket.on('error', (data) => {
     const joinBtn = document.getElementById('join-btn');
     if (joinBtn) joinBtn.disabled = false;
-    alert(data.message);
+    const msg = data && data.message ? data.message : 'Something went wrong.';
+    const obScreen = screens.onboardingPracticeVoting;
+    if (obScreen && obScreen.classList.contains('active')) {
+        const err = document.getElementById('ob-practice-vote-error');
+        if (err) {
+            err.textContent = msg;
+            err.style.display = 'block';
+            return;
+        }
+    }
+    alert(msg);
 });
 
 // Helper functions
@@ -2256,6 +2511,8 @@ socket.on('return_to_lobby', (data) => {
     // Return to lobby screen
     showScreen('lobby');
     // Reset game state
+    gameState.imageContextBulletsEnabled = false;
+    syncImageContextBulletsVisibility();
     gameState.inSelectionPhase = false;
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
@@ -2263,9 +2520,11 @@ socket.on('return_to_lobby', (data) => {
     gameState.tempVoteSelection = null;
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
     clearRoundTimerIfAny();
+    resetObPracticeVotingForm();
     const obHintRt = document.getElementById('onboarding-limit-hint');
     if (obHintRt) {
         obHintRt.style.display = 'none';

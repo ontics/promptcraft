@@ -240,8 +240,60 @@ def create_player(game_id: int, player_id: str, player_name: str, team: Optional
         _game_id_cache[player_id] = game_id
         print(f"✅ Created/updated player: {player_id} ({player_name})")
         flush_pre_survey_pending_to_player(player_id, game_id)
+        link_onboarding_practice_vote_to_game(player_id, game_id)
     except Exception as e:
         print(f"❌ Error creating player: {e}")
+
+
+def save_onboarding_practice_vote(
+    player_id: str,
+    player_name: str,
+    p1: int,
+    p2: int,
+    p3: int,
+) -> bool:
+    """Upsert onboarding practice point distribution for a player (before or after game_id exists)."""
+    if not is_configured() or not player_id:
+        return False
+    try:
+        now = datetime.utcnow().isoformat()
+        existing = (
+            supabase.table('onboarding_practice_votes')
+            .select('game_id')
+            .eq('player_id', player_id)
+            .execute()
+        )
+        game_id_val = None
+        if existing.data:
+            game_id_val = existing.data[0].get('game_id')
+        row = {
+            'player_id': player_id,
+            'player_name': player_name,
+            'points_slot_1': p1,
+            'points_slot_2': p2,
+            'points_slot_3': p3,
+            'submitted_at': now,
+        }
+        if game_id_val is not None:
+            row['game_id'] = game_id_val
+        supabase.table('onboarding_practice_votes').upsert(row, on_conflict='player_id').execute()
+        print(f"✅ Saved onboarding_practice_vote for player {player_id[:8]}...")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving onboarding_practice_vote: {e}")
+        return False
+
+
+def link_onboarding_practice_vote_to_game(player_id: str, game_id: int) -> None:
+    """Attach game_id to an existing onboarding practice vote row when the player joins analytics `players`."""
+    if not is_configured() or not game_id or not player_id:
+        return
+    try:
+        supabase.table('onboarding_practice_votes').update({'game_id': game_id}).eq(
+            'player_id', player_id
+        ).execute()
+    except Exception as e:
+        print(f"❌ Error linking onboarding_practice_vote to game: {e}")
 
 
 def upload_image_to_storage(image_bytes: bytes, file_path: str) -> Optional[str]:
