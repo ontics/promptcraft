@@ -145,6 +145,9 @@
                             <div class="target-image-container">
                                 <img id="target-image-display" src="" alt="Target Image">
                             </div>
+                            <div class="image-context-bullets gameplay-image-context-bullets" id="game-target-bullets" aria-hidden="true">
+                                <ul class="image-context-bullets-list"></ul>
+                            </div>
                         </div>
 
                         <div class="character-section">
@@ -168,6 +171,68 @@
                         </div>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Onboarding only: practice point distribution (not live voting) -->
+        <div id="onboarding-practice-voting-screen" class="screen">
+            <div class="container onboarding-practice-voting-wrap">
+                <h2 class="ob-vote-heading">Distribute 100 points among the following images</h2>
+                <p class="ob-vote-subtitle" id="ob-practice-title-remaining" aria-live="polite">100 points remaining</p>
+                <p class="ob-vote-peers-notice" role="note">These are your peers' images. You won't see your own image during voting.</p>
+                <div class="ob-vote-grid">
+                    <div class="ob-vote-option-col">
+                        <div class="ob-vote-placeholder" id="ob-practice-slot-1">
+                            <img class="ob-vote-option-img" src="{{ url_for('static', filename='images/onboarding-practice-option-1.png') }}" width="220" height="220" alt="Voting option 1" />
+                        </div>
+                        <div class="image-context-bullets image-context-bullets--onboarding-placeholder" aria-hidden="true">
+                            <ul class="image-context-bullets-list"></ul>
+                        </div>
+                        <div class="ob-vote-points-row">
+                            <label class="ob-vote-input-label" for="ob-practice-pts-1">Points</label>
+                            <input type="number" class="ob-vote-input" id="ob-practice-pts-1" min="0" max="100" value="0" inputmode="numeric" aria-label="Points for voting option 1" />
+                        </div>
+                    </div>
+                    <div class="ob-vote-option-col">
+                        <div class="ob-vote-placeholder" id="ob-practice-slot-2">
+                            <img class="ob-vote-option-img" src="{{ url_for('static', filename='images/onboarding-practice-option-2.png') }}" width="220" height="220" alt="Voting option 2" />
+                        </div>
+                        <div class="image-context-bullets image-context-bullets--onboarding-placeholder" aria-hidden="true">
+                            <ul class="image-context-bullets-list"></ul>
+                        </div>
+                        <div class="ob-vote-points-row">
+                            <label class="ob-vote-input-label" for="ob-practice-pts-2">Points</label>
+                            <input type="number" class="ob-vote-input" id="ob-practice-pts-2" min="0" max="100" value="0" inputmode="numeric" aria-label="Points for voting option 2" />
+                        </div>
+                    </div>
+                    <div class="ob-vote-option-col">
+                        <div class="ob-vote-placeholder" id="ob-practice-slot-3">
+                            <img class="ob-vote-option-img" src="{{ url_for('static', filename='images/onboarding-practice-option-3.png') }}" width="220" height="220" alt="Voting option 3" />
+                        </div>
+                        <div class="image-context-bullets image-context-bullets--onboarding-placeholder" aria-hidden="true">
+                            <ul class="image-context-bullets-list"></ul>
+                        </div>
+                        <div class="ob-vote-points-row">
+                            <label class="ob-vote-input-label" for="ob-practice-pts-3">Points</label>
+                            <input type="number" class="ob-vote-input" id="ob-practice-pts-3" min="0" max="100" value="0" inputmode="numeric" aria-label="Points for voting option 3" />
+                        </div>
+                    </div>
+                    <div class="ob-vote-target-col">
+                        <div class="ob-vote-target-box">
+                            <span class="ob-vote-target-caption">TARGET IMAGE</span>
+                            <div class="ob-vote-target-img-wrap">
+                                <img id="ob-practice-target-img" src="" alt="Practice target" />
+                            </div>
+                        </div>
+                        <div class="image-context-bullets image-context-bullets--onboarding-placeholder" aria-hidden="true">
+                            <ul class="image-context-bullets-list"></ul>
+                        </div>
+                        <p class="ob-vote-remaining" id="ob-practice-points-remaining" aria-live="polite">100 points remaining</p>
+                    </div>
+                </div>
+                <p id="ob-practice-vote-error" class="lobby-survey-error" style="display: none;" role="alert"></p>
+                <button type="button" id="ob-practice-submit-btn" class="btn btn-primary">Submit</button>
+                <p id="ob-practice-vote-done" class="ob-practice-done" style="display: none;">Thanks — your practice points are recorded.</p>
             </div>
         </div>
 
@@ -223,6 +288,9 @@
                         <h3>Target Image</h3>
                         <div class="target-image-voting">
                             <img id="voting-target-image" src="" alt="Target Image">
+                            <div class="image-context-bullets gameplay-image-context-bullets" id="voting-target-bullets" aria-hidden="true">
+                                <ul class="image-context-bullets-list"></ul>
+                            </div>
                         </div>
                     </div>
                 </div>
