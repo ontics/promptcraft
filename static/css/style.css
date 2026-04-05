@@ -176,6 +176,24 @@ body {
     transform: translateY(-2px);
 }
 
+.btn-onboarding {
+    background: #228be6;
+    color: white;
+    margin-top: 8px;
+}
+
+.btn-onboarding:hover {
+    background: #1c7ed6;
+    transform: translateY(-2px);
+}
+
+.onboarding-limit-hint {
+    color: #1864ab;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+    font-weight: 600;
+}
+
 .btn:disabled {
     background: #ccc;
     cursor: not-allowed;
@@ -411,6 +429,39 @@ body {
     min-height: 200px; /* Ensure minimum space for character */
     overflow: visible; /* Allow character to be fully visible */
     padding-top: 10px; /* Add some padding at top */
+}
+
+.onboarding-instructions-panel {
+    width: 100%;
+    max-width: 340px;
+    padding: 12px 14px;
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 10px;
+    align-self: stretch;
+}
+
+.onboarding-instructions-title {
+    margin: 0 0 10px 0;
+    font-size: 1rem;
+    font-weight: 700;
+    color: #343a40;
+}
+
+.onboarding-instructions-list {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.9rem;
+    line-height: 1.45;
+    color: #495057;
+}
+
+.onboarding-instructions-list li {
+    margin-bottom: 8px;
+}
+
+.onboarding-instructions-list li:last-child {
+    margin-bottom: 0;
 }
 
 .character-bubble {

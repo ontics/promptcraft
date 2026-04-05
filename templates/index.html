@@ -29,6 +29,7 @@
                                 <div id="player-list" class="player-list lobby-box"></div>
                                 <div id="admin-controls" style="display: none;">
                                     <button id="assign-teams-btn" class="btn btn-primary">Assign Groups</button>
+                                    <button id="start-onboarding-btn" type="button" class="btn btn-onboarding">Start Onboarding</button>
                                     <button id="start-game-btn" class="btn btn-success">Start Game</button>
                                     <button id="restart-game-btn" class="btn btn-danger" style="margin-top: 10px;">🔄 Restart Game</button>
                                 </div>
@@ -101,7 +102,10 @@
         <div id="game-screen" class="screen">
             <div class="game-header">
                 <div class="header-left">
-                    <h2>Round <span id="round-number">1</span>/3</h2>
+                    <h2 id="game-round-heading">
+                        <span id="round-title-mode-normal" class="round-title-mode">Round <span id="round-number">1</span>/3</span>
+                        <span id="round-title-mode-practice" class="round-title-mode" style="display: none;">Practice Round</span>
+                    </h2>
                     <p class="player-info">
                         <span id="player-display-name"></span>
                     </p>
@@ -123,6 +127,7 @@
                         </div>
 
                         <div class="prompt-section">
+                            <p id="onboarding-limit-hint" class="onboarding-limit-hint" style="display: none;" role="status"></p>
                             <textarea id="prompt-input" placeholder="Text box for user prompt..." rows="2"></textarea>
                             <button id="generate-btn" class="btn btn-primary">
                                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -143,6 +148,17 @@
                         </div>
 
                         <div class="character-section">
+                            <div id="onboarding-instructions-panel" class="onboarding-instructions-panel" style="display: none;" aria-hidden="true">
+                                <h3 class="onboarding-instructions-title">How the game works</h3>
+                                <ul class="onboarding-instructions-list">
+                                    <li>🎯 Prompt an image which matches the target</li>
+                                    <li>⏱️ Generate as many as you want within 5 minutes</li>
+                                    <li>🖼️ Pick your best image at the end of the round</li>
+                                    <li>🗳️ Vote for the image you think looks most like the target</li>
+                                    <li>🏆 Earn points based on votes you receive</li>
+                                    <li>🎮 Play 3 rounds - highest scoring player wins!</li>
+                                </ul>
+                            </div>
                             <div id="character-bubble" class="character-bubble" style="display: none;">
                                 <p id="character-bubble-text"></p>
                             </div>

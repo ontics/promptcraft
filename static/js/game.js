@@ -29,8 +29,87 @@ let gameState = {
     votingStartTime: null,  // Unix timestamp for voting start
     votingDuration: null,  // Duration in seconds
     inSelectionPhase: false,  // Track if we're in the selection phase (for late-arriving images)
-    surveyCompleted: false
+    surveyCompleted: false,
+    inOnboarding: false,
+    onboardingMaxPrompts: 3,
+    onboardingPromptCount: 0
 };
+
+let timerInterval;
+
+function applyOnboardingGenerateState() {
+    if (!gameState.inOnboarding || gameState.isAdmin) return;
+    const max = gameState.onboardingMaxPrompts || 3;
+    const btn = document.getElementById('generate-btn');
+    const input = document.getElementById('prompt-input');
+    const hint = document.getElementById('onboarding-limit-hint');
+    const atLimit = gameState.onboardingPromptCount >= max;
+    if (atLimit) {
+        if (input) {
+            input.disabled = true;
+            input.style.display = 'none';
+        }
+        if (btn) {
+            btn.disabled = true;
+            btn.style.display = 'none';
+        }
+        if (hint) {
+            hint.style.display = 'block';
+            hint.textContent = `Practice limit reached (${max} prompts).`;
+        }
+    } else {
+        if (input) {
+            input.disabled = false;
+            input.style.display = '';
+        }
+        if (btn) {
+            btn.disabled = false;
+            btn.style.display = '';
+        }
+        if (hint) hint.style.display = 'none';
+    }
+}
+
+function clearRoundTimerIfAny() {
+    if (timerInterval) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+    }
+}
+
+function setGameRoundHeadingPractice() {
+    const normal = document.getElementById('round-title-mode-normal');
+    const practice = document.getElementById('round-title-mode-practice');
+    if (normal) normal.style.display = 'none';
+    if (practice) practice.style.display = '';
+}
+
+function setGameRoundHeadingNormal(roundNum) {
+    const normal = document.getElementById('round-title-mode-normal');
+    const practice = document.getElementById('round-title-mode-practice');
+    const rn = document.getElementById('round-number');
+    if (practice) practice.style.display = 'none';
+    if (normal) normal.style.display = '';
+    if (rn != null && roundNum != null) {
+        rn.textContent = String(roundNum);
+    }
+}
+
+function setOnboardingInstructionsPanelVisible(visible) {
+    const panel = document.getElementById('onboarding-instructions-panel');
+    const bubble = document.getElementById('character-bubble');
+    const avatarLarge = document.getElementById('character-avatar-large');
+    if (panel) {
+        panel.style.display = visible ? 'block' : 'none';
+        panel.setAttribute('aria-hidden', visible ? 'false' : 'true');
+    }
+    if (visible) {
+        if (bubble) bubble.style.display = 'none';
+        if (avatarLarge) avatarLarge.style.display = 'none';
+    } else {
+        if (avatarLarge) avatarLarge.style.display = '';
+    }
+}
 
 // DOM elements
 const screens = {
@@ -171,6 +250,10 @@ document.getElementById('join-btn').addEventListener('click', joinGame);
 
 document.getElementById('assign-teams-btn').addEventListener('click', () => {
     socket.emit('assign_teams');
+});
+
+document.getElementById('start-onboarding-btn')?.addEventListener('click', () => {
+    socket.emit('start_onboarding');
 });
 
 document.getElementById('start-game-btn').addEventListener('click', () => {
@@ -363,7 +446,9 @@ socket.on('game_joined', (data) => {
 socket.on('admin_joined', (data) => {
     console.log('admin_joined event received:', data);
     gameState.isAdmin = true;
-    
+    gameState.currentRound = 0;
+    gameState.inOnboarding = false;
+
     // Show admin screen in lobby
     const adminScreen = document.getElementById('admin-screen');
     const adminControls = document.getElementById('admin-controls');
@@ -397,7 +482,10 @@ socket.on('admin_replaced', (data) => {
 
 socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
-    
+
+    gameState.inOnboarding = false;
+    gameState.currentRound = data.round != null ? data.round : 1;
+
     // Ensure admin screen is visible
     const adminScreen = document.getElementById('admin-screen');
     if (adminScreen) {
@@ -434,6 +522,33 @@ socket.on('admin_game_started', (data) => {
     
     // Update admin player list
     updateAdminPlayerList(data.players);
+});
+
+socket.on('admin_onboarding_started', (data) => {
+    gameState.inOnboarding = true;
+    gameState.currentRound = 0;
+    gameState.roundEndTime = null;
+    if (adminTimerInterval) {
+        clearInterval(adminTimerInterval);
+        adminTimerInterval = null;
+    }
+
+    const adminScreen = document.getElementById('admin-screen');
+    if (adminScreen) adminScreen.style.display = 'block';
+
+    const adminGameControls = document.getElementById('admin-game-controls');
+    if (adminGameControls) adminGameControls.style.display = 'none';
+
+    const timeEl = document.getElementById('admin-time-remaining');
+    if (timeEl) timeEl.textContent = '5:00';
+
+    document.getElementById('admin-round').textContent = '—';
+    document.getElementById('admin-status').textContent = 'Onboarding (practice)';
+    document.getElementById('admin-target').textContent = 'Practice target';
+
+    if (data.players) {
+        updateAdminPlayerList(data.players);
+    }
 });
 
 socket.on('admin_voting_started', (data) => {
@@ -492,6 +607,7 @@ socket.on('admin_status_update', (data) => {
         document.getElementById('admin-status').textContent = data.status;
         if (data.round) {
             document.getElementById('admin-round').textContent = data.round;
+            gameState.currentRound = data.round;
         }
     }
 });
@@ -635,29 +751,53 @@ socket.on('player_voted', (data) => {
 function updateAdminPlayerList(players) {
     const adminPlayerList = document.getElementById('admin-player-list');
     if (!adminPlayerList) return;
+
+    if (gameState.isAdmin && gameState.inOnboarding) {
+        const nonAdmin = players.filter((p) => !p.is_admin);
+        if (nonAdmin.length === 0) {
+            gameState.inOnboarding = false;
+            const timeEl = document.getElementById('admin-time-remaining');
+            if (timeEl) timeEl.textContent = '-';
+            const st = document.getElementById('admin-status');
+            if (st) st.textContent = '-';
+            const ar = document.getElementById('admin-round');
+            if (ar) ar.textContent = '-';
+            const at = document.getElementById('admin-target');
+            if (at) at.textContent = '-';
+        }
+    }
     
     adminPlayerList.innerHTML = '<h3>Players</h3>';
     
-    // Check if we're in lobby (gameState.currentRound === 0 means lobby)
-    const isInLobby = gameState.currentRound === 0;
-    
-    // Add "Clear Lobby" button at the top (only show in lobby)
+    const isInLobby = gameState.currentRound === 0 && !gameState.inOnboarding;
+    // Team dropdown + remove player: lobby, or onboarding practice (not live rounds)
+    const showTeamAndRosterControls = gameState.currentRound === 0 || gameState.inOnboarding;
+
+    const connectedCount = players.filter((p) => !p.is_admin && p.is_connected).length;
+    const disconnectedCount = players.filter((p) => !p.is_admin && !p.is_connected).length;
+
+    const connectionCountsEl = document.createElement('div');
+    connectionCountsEl.className = 'admin-connection-counts';
+    connectionCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+    connectionCountsEl.innerHTML = `
+        <div><strong>Connected:</strong> ${connectedCount}</div>
+        <div><strong>Disconnected:</strong> ${disconnectedCount}</div>
+    `;
+    adminPlayerList.appendChild(connectionCountsEl);
+
+    // Pre-survey stats + clear lobby (lobby only)
     if (isInLobby) {
-        const connectedCount = players.filter(p => !p.is_admin && p.is_connected).length;
-        const disconnectedCount = players.filter(p => !p.is_admin && !p.is_connected).length;
-        const nonAdminLobby = players.filter(p => !p.is_admin);
-        const preSurveyCompletedCount = nonAdminLobby.filter(p => p.survey_completed === true).length;
+        const nonAdminLobby = players.filter((p) => !p.is_admin);
+        const preSurveyCompletedCount = nonAdminLobby.filter((p) => p.survey_completed === true).length;
         const preSurveyPendingCount = nonAdminLobby.length - preSurveyCompletedCount;
 
-        const countsEl = document.createElement('div');
-        countsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
-        countsEl.innerHTML = `
-            <div><strong>Connected:</strong> ${connectedCount}</div>
-            <div><strong>Disconnected:</strong> ${disconnectedCount}</div>
+        const surveyCountsEl = document.createElement('div');
+        surveyCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+        surveyCountsEl.innerHTML = `
             <div><strong>Pre-survey:</strong> ${preSurveyPendingCount}</div>
             <div><strong>Pre-survey completed:</strong> ${preSurveyCompletedCount}</div>
         `;
-        adminPlayerList.appendChild(countsEl);
+        adminPlayerList.appendChild(surveyCountsEl);
 
         const clearLobbyBtn = document.createElement('button');
         clearLobbyBtn.className = 'btn btn-danger';
@@ -697,8 +837,8 @@ function updateAdminPlayerList(players) {
         nameStrong.textContent = player.name;
         nameRow.appendChild(nameStrong);
         
-        // Team dropdown (only in lobby, only for non-admin players)
-        if (isInLobby && !player.is_admin) {
+        // Team dropdown (lobby or onboarding practice; hidden during scored rounds)
+        if (showTeamAndRosterControls && !player.is_admin) {
             const teamSelect = document.createElement('select');
             teamSelect.className = 'team-select';
             teamSelect.style.cssText = 'padding: 2px 5px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;';
@@ -760,6 +900,8 @@ function updateAdminPlayerList(players) {
         if (!player.is_admin) {
             if (isInLobby) {
                 phaseBadge = `<br><small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
+            } else if (gameState.inOnboarding) {
+                phaseBadge = '<br><small style="color: #1864ab; font-weight: 600;">Practice (onboarding)</small>';
             } else if (!selectionStatus && !voteStatus) {
                 phaseBadge = '<br><small style="color: #5f3dc4; font-weight: 600;">Prompting</small>';
             }
@@ -784,8 +926,8 @@ function updateAdminPlayerList(players) {
             rightDiv.appendChild(scoreDiv);
         }
         
-        // Add remove button (only in lobby)
-        if (isInLobby) {
+        // Add remove button (lobby or onboarding practice)
+        if (showTeamAndRosterControls) {
             const removeBtn = document.createElement('button');
             removeBtn.className = 'btn btn-danger';
             removeBtn.style.cssText = 'padding: 5px 10px; font-size: 0.8em; min-width: 60px;';
@@ -872,12 +1014,73 @@ function updatePlayerList(players) {
     }
 }
 
+socket.on('onboarding_started', (data) => {
+    if (gameState.isAdmin) return;
+
+    gameState.inOnboarding = true;
+    gameState.onboardingMaxPrompts = data.max_prompts || 3;
+    gameState.onboardingPromptCount = 0;
+    gameState.currentRound = 1;
+    gameState.generatedImages = [];
+    gameState.selectedImageIndex = null;
+
+    stopCharacterTalking();
+    if (gameState.messageAutoHideTimer) {
+        clearTimeout(gameState.messageAutoHideTimer);
+        gameState.messageAutoHideTimer = null;
+    }
+
+    setOnboardingInstructionsPanelVisible(true);
+
+    setGameRoundHeadingPractice();
+
+    const targetImage = document.getElementById('target-image-display');
+    if (targetImage && data.target) {
+        targetImage.src = data.target.url;
+        targetImage.alt = 'Practice target';
+    }
+
+    const conversationArea = document.getElementById('conversation-area');
+    if (conversationArea) {
+        conversationArea.innerHTML = '<p class="empty-conversation">Start generating images by typing a prompt below</p>';
+    }
+
+    clearRoundTimerIfAny();
+    const timerEl = document.getElementById('timer');
+    if (timerEl) {
+        timerEl.textContent = '5:00';
+        timerEl.classList.remove('warning');
+    }
+
+    applyOnboardingGenerateState();
+    showScreen('game');
+});
+
 socket.on('game_started', (data) => {
     // Don't handle game events if user is admin
     if (gameState.isAdmin) {
         return;
     }
-    
+
+    gameState.inOnboarding = false;
+    gameState.onboardingPromptCount = 0;
+    setOnboardingInstructionsPanelVisible(false);
+    const obHint = document.getElementById('onboarding-limit-hint');
+    if (obHint) {
+        obHint.style.display = 'none';
+        obHint.textContent = '';
+    }
+    const genBtn = document.getElementById('generate-btn');
+    const pInput = document.getElementById('prompt-input');
+    if (genBtn) {
+        genBtn.disabled = false;
+        genBtn.style.display = '';
+    }
+    if (pInput) {
+        pInput.disabled = false;
+        pInput.style.display = '';
+    }
+
     // Reset selection phase flag for new round
     gameState.inSelectionPhase = false;
     
@@ -893,8 +1096,8 @@ socket.on('game_started', (data) => {
         messageBubble.style.display = 'none';
     }
 
-    document.getElementById('round-number').textContent = data.round;
-    
+    setGameRoundHeadingNormal(data.round);
+
     // Display target image
     const targetImage = document.getElementById('target-image-display');
     targetImage.src = data.target.url;
@@ -1139,6 +1342,10 @@ function updateAvatarState(characterData) {
 }
 
 socket.on('character_message', (data) => {
+    if (gameState.inOnboarding) {
+        return;
+    }
+
     const messageBubble = document.getElementById('character-bubble');
     const messageText = document.getElementById('character-bubble-text');
 
@@ -1243,10 +1450,23 @@ socket.on('prompt_sent', (data) => {
 });
 
 socket.on('image_generated', (data) => {
+    if (data.onboarding) {
+        gameState.onboardingPromptCount = (gameState.onboardingPromptCount || 0) + 1;
+    }
+
     // Skip error images - don't add them to generatedImages or selection gallery
     if (data.error_type) {
-        // Error images are handled via character error messages
-        // Don't add them to the selection gallery
+        if (data.onboarding) {
+            const conversationArea = document.getElementById('conversation-area');
+            const imageContainers = conversationArea ? conversationArea.querySelectorAll('.image-container') : [];
+            if (imageContainers.length > 0) {
+                const lastContainer = imageContainers[imageContainers.length - 1];
+                if (lastContainer.querySelector('.image-loading')) {
+                    lastContainer.innerHTML = '<div class="image-result error-blank"></div>';
+                }
+            }
+            applyOnboardingGenerateState();
+        }
         return;
     }
     
@@ -1268,6 +1488,10 @@ socket.on('image_generated', (data) => {
     // Scroll to bottom
     if (conversationArea) {
     conversationArea.scrollTop = conversationArea.scrollHeight;
+    }
+
+    if (data.onboarding) {
+        applyOnboardingGenerateState();
     }
     
     // If we're in selection phase (either selection screen is active OR we've received voting_started),
@@ -1842,6 +2066,9 @@ socket.on('game_restarted', (data) => {
     showScreen('lobby');
     // Reset state
     gameState.currentRound = 0;
+    gameState.inOnboarding = false;
+    gameState.onboardingPromptCount = 0;
+    setOnboardingInstructionsPanelVisible(false);
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
@@ -1859,6 +2086,9 @@ socket.on('game_restarted_kick', (data) => {
     
     // Clear all game state
     gameState.currentRound = 0;
+    gameState.inOnboarding = false;
+    gameState.onboardingPromptCount = 0;
+    setOnboardingInstructionsPanelVisible(false);
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
@@ -1934,8 +2164,6 @@ function addImageToGallery(imageData, prompt, index) {
 
     gallery.appendChild(item);
 }
-
-let timerInterval;
 
 function startRoundTimer(endTime) {
     if (timerInterval) clearInterval(timerInterval);
@@ -2034,6 +2262,25 @@ socket.on('return_to_lobby', (data) => {
     gameState.votedFor = null;
     gameState.tempVoteSelection = null;
     gameState.currentRound = 0;
+    gameState.inOnboarding = false;
+    gameState.onboardingPromptCount = 0;
+    setOnboardingInstructionsPanelVisible(false);
+    clearRoundTimerIfAny();
+    const obHintRt = document.getElementById('onboarding-limit-hint');
+    if (obHintRt) {
+        obHintRt.style.display = 'none';
+        obHintRt.textContent = '';
+    }
+    const genBtnRt = document.getElementById('generate-btn');
+    const pInRt = document.getElementById('prompt-input');
+    if (genBtnRt) {
+        genBtnRt.disabled = false;
+        genBtnRt.style.display = '';
+    }
+    if (pInRt) {
+        pInRt.disabled = false;
+        pInRt.style.display = '';
+    }
     
     // Clear time calculation timers
     if (adminTimerInterval) {

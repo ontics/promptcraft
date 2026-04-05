@@ -27,7 +27,7 @@ genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
 # Game state
 game_state = {
-    'status': 'lobby',  # lobby, playing, voting, round_results, game_over
+    'status': 'lobby',  # lobby, onboarding, playing, voting, round_results, game_over
     'current_round': 0,
     'round_start_time': None,
     'round_end_time': None,
@@ -40,7 +40,9 @@ game_state = {
         {'id': 2, 'url': '/static/images/target2.jpg'},
         {'id': 3, 'url': '/static/images/target3.jpg'}
     ],
-    'current_target': None
+    'current_target': None,
+    # Practice prompting before scored rounds (see start_onboarding)
+    'onboarding_target': {'id': 0, 'url': '/static/images/onboarding-target.png'},
 }
 
 players = {}  # session_id: player_data
@@ -224,6 +226,13 @@ def admin_player_status_row_with_round(p):
     ensure_survey_fields(p)
     cr = game_state.get('current_round', 0)
     st = game_state['status']
+    if st == 'onboarding':
+        return {
+            **admin_lobby_player_row(p),
+            'prompts_submitted': len(p.get('onboarding_images', [])),
+            'has_selected': None,
+            'has_voted': None,
+        }
     include_game_state = st != 'lobby' and cr > 0
     row = {
         **admin_lobby_player_row(p),
@@ -240,6 +249,38 @@ def admin_player_status_row_with_round(p):
         ),
     }
     return row
+
+
+def notify_admin_player_list():
+    """Push full player rows to the Gamemaster dashboard when the roster changes."""
+    if admin_session_id not in players:
+        return
+    adm_sock = players[admin_session_id].get('socket_id')
+    if not adm_sock:
+        return
+    socketio.emit(
+        'player_status_update',
+        {'players': [admin_player_status_row_with_round(p) for p in players.values()]},
+        room=adm_sock,
+    )
+
+
+def ensure_onboarding_player_fields(player):
+    """Scratch state for practice prompting (not scored, not persisted as round prompts)."""
+    player.setdefault('onboarding_images', [])
+    player.setdefault('onboarding_conversation', [])
+    player.setdefault('onboarding_current_image', None)
+    player.setdefault('onboarding_prompt_count', 0)
+    player.setdefault('onboarding_has_successful', False)
+
+
+def onboarding_buddy_progress_message(onboarding_prompt_index):
+    """Buddy line after each practice prompt; onboarding_prompt_index is 1-based."""
+    if onboarding_prompt_index <= 0:
+        return None
+    if onboarding_prompt_index <= len(BUDDY_MESSAGES):
+        return BUDDY_MESSAGES[onboarding_prompt_index - 1]
+    return BUDDY_MESSAGES[-1]
 
 
 def get_spud_plant_state(prompt_count, has_successful_prompt=False):
@@ -468,13 +509,52 @@ def handle_join_game(data):
                             'prompts_submitted': len(p['images'].get(game_state['current_round'], []))
                         } for p in players.values() if not p['is_admin']]
                     }, room=player['socket_id'])
+                elif game_state['status'] == 'onboarding':
+                    socketio.emit('admin_onboarding_started', {
+                        'target': game_state.get('onboarding_target'),
+                        'players': [{
+                            'name': p.get('display_name', p['name']),
+                            'team': p['team'],
+                            'is_connected': p.get('socket_id') is not None,
+                            'session_id': p['session_id'],
+                            'prompts_submitted': len(p.get('onboarding_images', [])),
+                        } for p in players.values() if not p['is_admin']]
+                    }, room=player['socket_id'])
                 elif game_state['status'] in ['voting', 'voting_images', 'round_results']:
                     # Send current admin status
                     handle_admin_get_status()
             else:
                 # Regular player reconnection - restore their game state
                 current_round = game_state['current_round']
-                if game_state['status'] == 'playing':
+                if game_state['status'] == 'onboarding':
+                    ensure_onboarding_player_fields(player)
+                    welcome = get_welcome_message(player, 1)
+                    char_payload = {
+                        'character': 'Bud',
+                        'animation_state': get_bud_animation_state(),
+                        'round': 1,
+                    }
+                    if welcome:
+                        char_payload['message'] = welcome
+                    socketio.emit('onboarding_started', {
+                        'target': game_state.get('onboarding_target'),
+                        'character': char_payload,
+                        'max_prompts': 3,
+                    }, room=player['socket_id'])
+                    for img_data in player.get('onboarding_images', []):
+                        image_url = img_data.get('image_url')
+                        socketio.emit('image_generated', {
+                            'image_data': img_data.get('image_data', '') if not image_url else '',
+                            'image_url': image_url,
+                            'ai_response': img_data.get('ai_response', ''),
+                            'prompt': img_data.get('prompt', ''),
+                            'image_index': player['onboarding_images'].index(img_data),
+                            'prompt_id': img_data.get('prompt_id'),
+                            'error_type': img_data.get('error_type'),
+                            'file_size_kb': img_data.get('file_size_kb'),
+                            'onboarding': True,
+                        }, room=player['socket_id'])
+                elif game_state['status'] == 'playing':
                     # Determine character for this round
                     character = get_character_for_round(player, current_round)
                     character_data = {
@@ -684,6 +764,7 @@ def handle_join_game(data):
                     'lobby_players': lobby_players
                 }, room=player['socket_id'])
             socketio.emit('lobby_players_update', {'players': lobby_players})
+            notify_admin_player_list()
         
         print(f"Player {player.get('display_name', player_name)} reconnected (Admin: {player['is_admin']})")
         return
@@ -811,10 +892,30 @@ def handle_join_game(data):
             'lobby_players': lobby_players if lobby_players else []
         }, room=player['socket_id'])
 
+        if game_state['status'] == 'onboarding':
+            ensure_onboarding_player_fields(player)
+            welcome = get_welcome_message(player, 1)
+            char_payload = {
+                'character': 'Bud',
+                'animation_state': get_bud_animation_state(),
+                'round': 1,
+            }
+            if welcome:
+                char_payload['message'] = welcome
+            socketio.emit('onboarding_started', {
+                'target': game_state.get('onboarding_target'),
+                'character': char_payload,
+                'max_prompts': 3,
+            }, room=player['socket_id'])
+
     # Broadcast player list update to all (only if in lobby)
     if game_state['status'] == 'lobby' and lobby_players is not None:
         print(f"[LOBBY] Broadcasting lobby_players_update to all clients: {len(lobby_players)} players")
         socketio.emit('lobby_players_update', {'players': lobby_players})
+        notify_admin_player_list()
+    elif game_state['status'] == 'onboarding':
+        # No public lobby broadcast during onboarding; still sync Gamemaster dashboard
+        notify_admin_player_list()
 
 
 @socketio.on('submit_pre_survey')
@@ -861,10 +962,7 @@ def handle_submit_pre_survey(data):
     emit('survey_submitted', {'success': True})
     lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        socketio.emit('player_status_update', {
-            'players': [admin_player_status_row_with_round(p) for p in players.values()]
-        }, room=players[admin_session_id]['socket_id'])
+    notify_admin_player_list()
 
 
 @socketio.on('admin_login')
@@ -948,13 +1046,10 @@ def handle_admin_login(data):
     lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
 
-    # Also push an admin-specific player status update so the dashboard stays in sync
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         admin_socket_id = players[admin_session_id]['socket_id']
         print(f"[LOBBY] Sending player_status_update to admin (socket_id: {admin_socket_id}): {len(players)} total players")
-        socketio.emit('player_status_update', {
-            'players': [admin_player_status_row_with_round(p) for p in players.values()]
-        }, room=admin_socket_id)
+    notify_admin_player_list()
 
     # If there was a previous connected admin, notify them they were replaced and are disconnected from the game
     if old_admin_socket and old_admin_socket != player['socket_id']:
@@ -967,6 +1062,10 @@ def handle_assign_teams():
     # Check if player is admin
     if session_id != admin_session_id:
         emit('error', {'message': 'Only admin can assign teams'})
+        return
+
+    if game_state['status'] == 'onboarding':
+        emit('error', {'message': 'Cannot assign groups during onboarding. Start the game first.'})
         return
     
     # Get all non-admin players who are connected (have a socket_id)
@@ -1027,13 +1126,9 @@ def handle_assign_teams():
     
     # Update admin dashboard to show new team assignments
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        # Send player status update (works in lobby and during game)
         player_list = [admin_player_status_row_with_round(p) for p in players.values()]
         print(f"[ASSIGN TEAMS] Sending player_status_update to admin with teams: {[(p['name'], p['team']) for p in player_list if not p['is_admin']]}")
-        socketio.emit('player_status_update', {
-            'players': player_list
-        }, room=players[admin_session_id]['socket_id'])
-        
+        notify_admin_player_list()
         # Also update admin status if game is in progress
         if game_state['status'] != 'lobby':
             handle_admin_get_status()
@@ -1052,7 +1147,7 @@ def handle_start_game():
     # Get non-admin players only
     non_admin_players = [p for p in players.values() if not p['is_admin']]
     
-    if game_state['status'] == 'lobby' and len(non_admin_players) >= 1:
+    if game_state['status'] in ('lobby', 'onboarding') and len(non_admin_players) >= 1:
         # Make sure teams are assigned
         players_without_teams = [p for p in non_admin_players if p['team'] is None]
         if players_without_teams:
@@ -1095,6 +1190,11 @@ def handle_start_game():
                 p['current_image'][1] = None
                 p['prompt_count'] = 0  # Reset prompt count for avatar state
                 p['has_successful_prompt'][1] = False  # Reset successful prompt tracking
+                p['onboarding_images'] = []
+                p['onboarding_conversation'] = []
+                p['onboarding_current_image'] = None
+                p['onboarding_prompt_count'] = 0
+                p['onboarding_has_successful'] = False
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round 1")
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
@@ -1146,6 +1246,88 @@ def handle_start_game():
 
         print("Game started!")
 
+
+@socketio.on('start_onboarding')
+def handle_start_onboarding():
+    """Gamemaster: practice prompting phase (fixed target, max 3 prompts, no round timer)."""
+    session_id = session.get('session_id')
+    if session_id != admin_session_id:
+        emit('error', {'message': 'Only the Gamemaster can start onboarding'})
+        return
+
+    if game_state['status'] != 'lobby':
+        emit('error', {'message': 'Onboarding can only start from the lobby'})
+        return
+
+    non_admin_players = [p for p in players.values() if not p['is_admin']]
+    if len(non_admin_players) < 1:
+        emit('error', {'message': 'Need at least one player to start onboarding'})
+        return
+
+    players_without_teams = [p for p in non_admin_players if p['team'] is None]
+    if players_without_teams:
+        emit('error', {'message': 'Please assign groups first'})
+        return
+
+    game_state['status'] = 'onboarding'
+    game_state['current_round'] = 0
+    game_state['round_start_time'] = None
+    game_state['round_end_time'] = None
+    target = game_state.get('onboarding_target') or {'id': 0, 'url': '/static/images/onboarding-target.png'}
+
+    for p in players.values():
+        if p['is_admin']:
+            continue
+        p['onboarding_images'] = []
+        p['onboarding_conversation'] = []
+        p['onboarding_current_image'] = None
+        p['onboarding_prompt_count'] = 0
+        p['onboarding_has_successful'] = False
+
+    for p in players.values():
+        if p['is_admin'] or not p.get('socket_id'):
+            continue
+        welcome = get_welcome_message(p, 1)
+        char_payload = {
+            'character': 'Bud',
+            'animation_state': get_bud_animation_state(),
+            'round': 1,
+        }
+        if welcome:
+            char_payload['message'] = welcome
+        socketio.emit(
+            'onboarding_started',
+            {
+                'target': target,
+                'character': char_payload,
+                'max_prompts': 3,
+            },
+            room=p['socket_id'],
+        )
+
+    if admin_session_id in players and players[admin_session_id].get('socket_id'):
+        socketio.emit(
+            'admin_onboarding_started',
+            {
+                'target': target,
+                'players': [
+                    {
+                        'name': p.get('display_name', p['name']),
+                        'team': p['team'],
+                        'is_connected': p.get('socket_id') is not None,
+                        'session_id': p['session_id'],
+                        'prompts_submitted': len(p.get('onboarding_images', [])),
+                    }
+                    for p in players.values()
+                    if not p['is_admin']
+                ],
+            },
+            room=players[admin_session_id]['socket_id'],
+        )
+
+    print('[ONBOARDING] Practice phase started')
+
+
 @socketio.on('send_prompt')
 def handle_send_prompt(data):
     session_id = session.get('session_id')
@@ -1161,68 +1343,77 @@ def handle_send_prompt(data):
     
     prompt = data.get('prompt', '')
     current_round = game_state['current_round']
+    is_onboarding = game_state['status'] == 'onboarding'
 
-    if game_state['status'] != 'playing':
+    if is_onboarding:
+        ensure_onboarding_player_fields(player)
+        if len(player['onboarding_images']) >= 3:
+            emit('error', {'message': 'Practice limit reached (3 prompts).'})
+            return
+    elif game_state['status'] != 'playing':
         emit('error', {'message': 'Game is not in playing state'})
         return
 
-    # Allow prompts during buffer period (5 seconds after round_end_time)
-    buffer_time = 5
-    if time.time() > game_state['round_end_time'] + buffer_time:
-        emit('error', {'message': 'Round has ended'})
-        return
+    if not is_onboarding:
+        buffer_time = 5
+        if time.time() > game_state['round_end_time'] + buffer_time:
+            emit('error', {'message': 'Round has ended'})
+            return
 
-    player['prompt_count'] += 1
+    if is_onboarding:
+        player['onboarding_prompt_count'] = player.get('onboarding_prompt_count', 0) + 1
+        opc = player['onboarding_prompt_count']
+    else:
+        player['prompt_count'] += 1
+        opc = player['prompt_count']
 
-    # First, show the prompt bubble and loading state
-    emit('prompt_sent', {
-        'prompt': prompt
-    })
+    emit('prompt_sent', {'prompt': prompt})
 
-    # Send character message and state updates
-    # Note: At this point, we don't know if this prompt will be successful or error
-    # So we use the current state (before this prompt's result is known)
-    character = get_character_for_round(player, current_round)
-    character_message = get_character_message(player, current_round)
-    
-    # Build character state data
-    character_data = {
-        'character': character,
-        'message': character_message,
-        'round': current_round
-    }
-    
-    # Add character-specific state information
-    prompt_count = player.get('prompt_count', 0)
-    has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
-    
-    if character == 'Bud':
-        # Bud: static pose is always smiling, will animate when message appears
-        character_data['animation_state'] = get_bud_animation_state()
-    elif character == 'Spud':
-        # Spud: determine plant state and animation state based on current status
-        # At this point, we use previous state (before this prompt's result)
-        # The state will be updated after we know if this prompt succeeded or failed
-        prev_prompt_count = max(0, prompt_count - 1)  # Use previous count for initial state
-        plant_state = get_spud_plant_state(prev_prompt_count, has_successful_prompt)
-        character_data['plant_state'] = plant_state
-        character_data['animation_state'] = get_spud_animation_state(prev_prompt_count, plant_state, is_error=False, has_successful_prompt=has_successful_prompt)
-        character_data['prompt_count'] = prompt_count
-    
+    ph_round = 1 if is_onboarding else current_round
+
+    if is_onboarding:
+        character_message = onboarding_buddy_progress_message(opc)
+        character_data = {
+            'character': 'Bud',
+            'message': character_message,
+            'round': 1,
+            'animation_state': get_bud_animation_state(),
+        }
+    else:
+        character = get_character_for_round(player, current_round)
+        character_message = get_character_message(player, current_round)
+        character_data = {
+            'character': character,
+            'message': character_message,
+            'round': current_round,
+        }
+        prompt_count = player.get('prompt_count', 0)
+        has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
+        if character == 'Bud':
+            character_data['animation_state'] = get_bud_animation_state()
+        elif character == 'Spud':
+            prev_prompt_count = max(0, prompt_count - 1)
+            plant_state = get_spud_plant_state(prev_prompt_count, has_successful_prompt)
+            character_data['plant_state'] = plant_state
+            character_data['animation_state'] = get_spud_animation_state(
+                prev_prompt_count, plant_state, is_error=False, has_successful_prompt=has_successful_prompt
+            )
+            character_data['prompt_count'] = prompt_count
+
     emit('character_message', character_data)
 
     # Generate image using Gemini
     try:
-        # Get conversation history for tracking (NOT used in API call - just for logging)
-        conversation = player['conversation_history'][current_round]
-        
-        # Use Gemini 2.5 Flash Image API
+        if is_onboarding:
+            conversation = player['onboarding_conversation']
+            current_image_obj = player.get('onboarding_current_image')
+        else:
+            conversation = player['conversation_history'][current_round]
+            current_image_obj = player['current_image'][current_round]
+
         client = google_genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-        
-        # Check if we have a current image for this round (for refinement)
-        current_image_obj = player['current_image'][current_round]
-        
-        print(f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {current_round}, Has current_image: {current_image_obj is not None}")
+
+        print(f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {ph_round}, onboarding={is_onboarding}, Has current_image: {current_image_obj is not None}")
         
         # Construct contents array: include previous image if exists, otherwise just prompt
         # IMPORTANT: No target description or context is added - only the user's prompt is sent
@@ -1262,7 +1453,7 @@ def handle_send_prompt(data):
             # - Prompt was submitted during valid 'playing' state (or buffer period)
             # - Image should still be included in selection gallery even if it arrives late
             # - We're still in the same round (not a new round or game restart)
-            if game_state['status'] not in ['playing', 'transitioning', 'voting']:
+            if game_state['status'] not in ['playing', 'transitioning', 'voting', 'onboarding']:
                 print(f"[WARNING] API response received but game is in invalid state (status: {game_state['status']}). Discarding response.")
                 return
             
@@ -1270,7 +1461,7 @@ def handle_send_prompt(data):
                 print(f"[WARNING] API response received but player {session_id[:8]}... no longer exists. Discarding response.")
                 return
             
-            if not game_state.get('game_id') or not game_state.get('round_id'):
+            if not is_onboarding and (not game_state.get('game_id') or not game_state.get('round_id')):
                 print(f"[WARNING] API response received but game_id or round_id is None. Discarding response.")
                 return
             
@@ -1324,13 +1515,19 @@ def handle_send_prompt(data):
                         
                         # Only store as current_image if it's valid (not an error)
                         if not error_type and not is_small_image(file_size_kb, threshold_kb=50):
-                            player['current_image'][current_round] = Image.open(io.BytesIO(image_bytes))
-                            # Mark that player has had at least one successful prompt this round
-                            player['has_successful_prompt'][current_round] = True
-                            print(f"[DEBUG] Stored new image for player {player['name']} (session: {session_id[:8]}...), round {current_round}, successful prompt")
+                            pil_img = Image.open(io.BytesIO(image_bytes))
+                            if is_onboarding:
+                                player['onboarding_current_image'] = pil_img
+                                player['onboarding_has_successful'] = True
+                            else:
+                                player['current_image'][current_round] = pil_img
+                                player['has_successful_prompt'][current_round] = True
+                            print(f"[DEBUG] Stored new image for player {player['name']} (session: {session_id[:8]}...), round {ph_round}, successful prompt")
                         else:
-                            # Don't store error images for refinement
-                            player['current_image'][current_round] = None
+                            if is_onboarding:
+                                player['onboarding_current_image'] = None
+                            else:
+                                player['current_image'][current_round] = None
                             print(f"[DEBUG] Not storing image for refinement due to error: {error_type}")
                         
                         break
@@ -1341,7 +1538,7 @@ def handle_send_prompt(data):
                     error_type = 'no_image_in_response'
                     error_message = 'API returned success but no image data'
                 print(f"[ERROR] No image in response for player {player['name']}, error_type: {error_type}")
-                image_data = create_placeholder_image(prompt, current_round)
+                image_data = create_placeholder_image(prompt, ph_round)
                 # Don't set ai_response here - will be set based on error_type below
             
             # Set user-friendly response message based on error type
@@ -1355,44 +1552,43 @@ def handle_send_prompt(data):
                 else:
                     ai_response = "Image generation encountered an issue. Please try again."
                 
-                # Get character-specific error message and emit as character message
-                character_error_message = get_character_error_message(player, current_round)
-                character = get_character_for_round(player, current_round)
-                
-                # Build character data for error message
+                cr_msg = 1 if is_onboarding else current_round
+                character_error_message = get_character_error_message(player, cr_msg)
+                character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
+
                 character_data = {
                     'character': character,
                     'message': character_error_message,
-                    'round': current_round
+                    'round': 1 if is_onboarding else current_round,
                 }
-                
-                # Add character-specific state information (error occurred, so no successful prompt yet)
-                prompt_count = player.get('prompt_count', 0)
-                has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
-                
+
+                prompt_count_err = opc if is_onboarding else player.get('prompt_count', 0)
+                has_successful_prompt = (
+                    player.get('onboarding_has_successful', False)
+                    if is_onboarding
+                    else player.get('has_successful_prompt', {}).get(current_round, False)
+                )
+
                 if character == 'Bud':
-                    # Bud: static pose is always smiling, will animate when message appears
                     character_data['animation_state'] = get_bud_animation_state()
                 elif character == 'Spud':
-                    # Spud: error occurred, so use current state (hasn't progressed yet)
-                    plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
+                    plant_state = get_spud_plant_state(prompt_count_err, has_successful_prompt)
                     character_data['plant_state'] = plant_state
-                    character_data['animation_state'] = get_spud_animation_state(prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt)
-                    character_data['prompt_count'] = prompt_count
-                
-                # Emit character error message (appears as speech bubble from avatar)
+                    character_data['animation_state'] = get_spud_animation_state(
+                        prompt_count_err, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
+                    )
+                    character_data['prompt_count'] = prompt_count_err
+
                 socketio.emit('character_message', character_data, room=player['socket_id'])
-                
-                # Also emit error for logging/analytics (but character message is primary UI)
+
                 socketio.emit('image_generation_error', {
                     'message': character_error_message,
                     'error_type': error_type,
                     'suggest_retry': True
                 }, room=player['socket_id'])
-                
-                # Track error in player's error list
+
                 error_entry = {
-                    'round': current_round,
+                    'round': 0 if is_onboarding else current_round,
                     'timestamp': time.time(),
                     'error_type': error_type,
                     'prompt': prompt,
@@ -1405,74 +1601,72 @@ def handle_send_prompt(data):
             else:
                 # Success case - update character state after successful image generation
                 ai_response = "Image generated successfully"
-                
-                # After successful image generation, update character state with new plant/animation state
-                character = get_character_for_round(player, current_round)
-                if character == 'Spud':
-                    # Spud's state may have changed (e.g., from base to yellow after first success)
-                    prompt_count = player.get('prompt_count', 0)
-                    has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
-                    plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
-                    animation_state = get_spud_animation_state(prompt_count, plant_state, is_error=False, has_successful_prompt=has_successful_prompt)
-                    
-                    # Update character state (plant may have changed from base to yellow/dry)
-                    character_update = {
-                        'character': character,
-                        'message': character_message,  # Keep the same message
-                        'round': current_round,
-                        'plant_state': plant_state,
-                        'animation_state': animation_state,
-                        'prompt_count': prompt_count
-                    }
-                    # Emit update to reflect state change (e.g., base -> yellow after first success)
-                    socketio.emit('character_message', character_update, room=player['socket_id'])
+
+                if not is_onboarding:
+                    character = get_character_for_round(player, current_round)
+                    if character == 'Spud':
+                        prompt_count = player.get('prompt_count', 0)
+                        has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
+                        plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
+                        animation_state = get_spud_animation_state(
+                            prompt_count, plant_state, is_error=False, has_successful_prompt=has_successful_prompt
+                        )
+                        character_update = {
+                            'character': character,
+                            'message': character_message,
+                            'round': current_round,
+                            'plant_state': plant_state,
+                            'animation_state': animation_state,
+                            'prompt_count': prompt_count,
+                        }
+                        socketio.emit('character_message', character_update, room=player['socket_id'])
             
         except Exception as img_error:
             print(f"Image generation error: {img_error}")
             error_type = 'exception'
             error_message = str(img_error)
             error_entry = {
-                'round': current_round,
+                'round': 0 if is_onboarding else current_round,
                 'timestamp': time.time(),
                 'error_type': error_type,
                 'prompt': prompt,
                 'error_message': error_message
             }
             player['image_generation_errors'].append(error_entry)
-            print(f"[ERROR TRACKING] Player {player['name']}: Exception in round {current_round}: {img_error}")
-            # Fallback to simple placeholder
-            image_data = create_placeholder_image(prompt, current_round)
+            print(f"[ERROR TRACKING] Player {player['name']}: Exception in round {ph_round}: {img_error}")
+            image_data = create_placeholder_image(prompt, ph_round)
             file_size_kb = None
             finish_reason = None
             safety_ratings = None
             ai_response = "Image generation encountered an error. Please try again."
-            
-            # Get character-specific error message and emit as character message
-            character_error_message = get_character_error_message(player, current_round)
-            character = get_character_for_round(player, current_round)
-            
-            # Build character data for error message
+
+            cr_msg = 1 if is_onboarding else current_round
+            character_error_message = get_character_error_message(player, cr_msg)
+            character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
+
             character_data = {
                 'character': character,
                 'message': character_error_message,
-                'round': current_round
+                'round': 1 if is_onboarding else current_round,
             }
-            
-            # Add character-specific state information (error occurred)
-            prompt_count = player.get('prompt_count', 0)
-            has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
-            
+
+            prompt_count = opc if is_onboarding else player.get('prompt_count', 0)
+            has_successful_prompt = (
+                player.get('onboarding_has_successful', False)
+                if is_onboarding
+                else player.get('has_successful_prompt', {}).get(current_round, False)
+            )
+
             if character == 'Bud':
-                # Bud: static pose is always smiling, will animate when message appears
                 character_data['animation_state'] = get_bud_animation_state()
             elif character == 'Spud':
-                # Spud: error occurred, so use current state
                 plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
                 character_data['plant_state'] = plant_state
-                character_data['animation_state'] = get_spud_animation_state(prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt)
+                character_data['animation_state'] = get_spud_animation_state(
+                    prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
+                )
                 character_data['prompt_count'] = prompt_count
-            
-            # Emit character error message (appears as speech bubble from avatar)
+
             socketio.emit('character_message', character_data, room=player['socket_id'])
             
             # Also emit error for logging/analytics
@@ -1486,25 +1680,27 @@ def handle_send_prompt(data):
         conversation.append({'role': 'user', 'content': prompt})
         conversation.append({'role': 'assistant', 'content': ai_response})
 
-        # Calculate prompt index (1-based)
-        prompt_index = len(player['images'][current_round]) + 1
-        # Note: is_refinement removed - can be determined from prompt_index >= 2 in analysis
-        
-        # Store generated image (with prompt_id placeholder, will be updated after DB save)
+        if is_onboarding:
+            image_bucket = player['onboarding_images']
+        else:
+            image_bucket = player['images'][current_round]
+
+        prompt_index = len(image_bucket) + 1
+
         image_entry = {
             'prompt': prompt,
             'image_data': image_data,
             'timestamp': time.time(),
             'ai_response': ai_response,
-            'prompt_id': None,  # Will be set after database save
+            'prompt_id': None,
             'prompt_index': prompt_index,
-            'error_type': error_type,  # Store error info in image entry
+            'error_type': error_type,
             'file_size_kb': file_size_kb
         }
-        player['images'][current_round].append(image_entry)
+        image_bucket.append(image_entry)
 
         # Save prompt to database and trigger async image upload
-        if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+        if not is_onboarding and db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
             submitted_at = datetime.fromtimestamp(time.time())
             image_generated_at = datetime.fromtimestamp(time.time())
             
@@ -1540,13 +1736,10 @@ def handle_send_prompt(data):
                         # Find the image_entry by prompt_id and update it
                         for img_entry in player['images'].get(current_round, []):
                             if img_entry.get('prompt_id') == uploaded_prompt_id:
-                                # Store URL and clear base64 data to free memory
                                 img_entry['image_url'] = image_url
                                 if 'image_data' in img_entry:
                                     del img_entry['image_data']
                                 print(f"[MEMORY] Cleared base64 data for prompt_id {uploaded_prompt_id}, using URL: {image_url[:50]}...")
-                                
-                                # Notify client that URL is now available (for selection screen)
                                 if player.get('socket_id'):
                                     socketio.emit('image_url_updated', {
                                         'prompt_id': uploaded_prompt_id,
@@ -1568,21 +1761,21 @@ def handle_send_prompt(data):
 
         socketio.emit('image_generated', {
             'image_data': image_data,
-            'image_url': image_entry.get('image_url'),  # Include URL if available (from previous upload)
+            'image_url': image_entry.get('image_url'),
             'ai_response': ai_response,
             'prompt': prompt,
-            'image_index': len(player['images'][current_round]) - 1,
-            'prompt_id': image_entry.get('prompt_id'),  # Include prompt_id for frontend
-            'error_type': error_type,  # Include error info
-            'file_size_kb': file_size_kb
+            'image_index': len(image_bucket) - 1,
+            'prompt_id': image_entry.get('prompt_id'),
+            'error_type': error_type,
+            'file_size_kb': file_size_kb,
+            'onboarding': is_onboarding,
         }, room=player['socket_id'])
-        
-        # Update admin dashboard with real-time prompts count
+
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
             socketio.emit('player_prompt_updated', {
                 'session_id': session_id,
-                'player_name': player['name'],
-                'prompts_submitted': len(player['images'][current_round])
+                'player_name': player.get('display_name', player['name']),
+                'prompts_submitted': len(image_bucket),
             }, room=players[admin_session_id]['socket_id'])
 
     except Exception as e:
@@ -1590,40 +1783,42 @@ def handle_send_prompt(data):
         error_type = 'outer_exception'
         error_message = str(e)
         error_entry = {
-            'round': current_round,
+            'round': 0 if is_onboarding else current_round,
             'timestamp': time.time(),
             'error_type': error_type,
             'prompt': prompt,
             'error_message': error_message
         }
         player['image_generation_errors'].append(error_entry)
-        print(f"[ERROR TRACKING] Player {player['name']}: Outer exception in round {current_round}: {e}")
-        # Get character-specific error message and emit as character message
-        character_error_message = get_character_error_message(player, current_round)
-        character = get_character_for_round(player, current_round)
-        
-        # Build character data for error message
+        print(f"[ERROR TRACKING] Player {player['name']}: Outer exception in round {ph_round}: {e}")
+
+        cr_msg = 1 if is_onboarding else current_round
+        character_error_message = get_character_error_message(player, cr_msg)
+        character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
+
         character_data = {
             'character': character,
             'message': character_error_message,
-            'round': current_round
+            'round': 1 if is_onboarding else current_round,
         }
-        
-        # Add character-specific state information (error occurred)
-        prompt_count = player.get('prompt_count', 0)
-        has_successful_prompt = player.get('has_successful_prompt', {}).get(current_round, False)
-        
+
+        prompt_count = opc if is_onboarding else player.get('prompt_count', 0)
+        has_successful_prompt = (
+            player.get('onboarding_has_successful', False)
+            if is_onboarding
+            else player.get('has_successful_prompt', {}).get(current_round, False)
+        )
+
         if character == 'Bud':
-            # Bud: static pose is always smiling, will animate when message appears
             character_data['animation_state'] = get_bud_animation_state()
         elif character == 'Spud':
-            # Spud: error occurred, so use current state
             plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
             character_data['plant_state'] = plant_state
-            character_data['animation_state'] = get_spud_animation_state(prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt)
+            character_data['animation_state'] = get_spud_animation_state(
+                prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
+            )
             character_data['prompt_count'] = prompt_count
-        
-        # Emit character error message (appears as speech bubble from avatar)
+
         socketio.emit('character_message', character_data, room=player['socket_id'])
         
         # Also emit error for logging/analytics
@@ -1821,6 +2016,9 @@ def handle_round_timer_check():
     # Don't process timer checks if we're showing results or game is over
     # Players should stay on results screen until admin progresses
     if game_state['status'] in ['round_results', 'game_over']:
+        return
+
+    if game_state['status'] == 'onboarding':
         return
     
     if game_state['status'] == 'playing':
@@ -2694,10 +2892,15 @@ def handle_admin_get_status():
     player_status = []
     for p in players.values():
         if not p['is_admin']:
-            prompts_submitted = len(p['images'].get(current_round, [])) if current_round > 0 else 0
-            has_selected = current_round in p['selected_images'] if status in ['voting', 'voting_images'] else None
-            has_voted = p['has_voted'].get(current_round, False) if status == 'voting_images' else None
-            
+            if status == 'onboarding':
+                prompts_submitted = len(p.get('onboarding_images', []))
+                has_selected = None
+                has_voted = None
+            else:
+                prompts_submitted = len(p['images'].get(current_round, [])) if current_round > 0 else 0
+                has_selected = current_round in p['selected_images'] if status in ['voting', 'voting_images'] else None
+                has_voted = p['has_voted'].get(current_round, False) if status == 'voting_images' else None
+
             player_status.append({
                 'name': p.get('display_name', p['name']),
                 'team': p['team'],
@@ -2845,9 +3048,9 @@ def handle_clear_lobby():
         emit('error', {'message': 'Only admin can clear lobby'})
         return
     
-    # Only clear if game is in lobby or game_over (after final leaderboard)
-    if game_state['status'] not in ['lobby', 'game_over']:
-        emit('error', {'message': 'Can only clear lobby when game is in lobby or game over state'})
+    # Only clear if game is in lobby, onboarding, or game_over (after final leaderboard)
+    if game_state['status'] not in ['lobby', 'game_over', 'onboarding']:
+        emit('error', {'message': 'Can only clear lobby when game is in lobby, onboarding, or game over state'})
         return
     
     # Remove all non-admin players
@@ -2869,16 +3072,15 @@ def handle_clear_lobby():
     for sess_id in players_to_remove:
         if sess_id in players:
             del players[sess_id]
-    
+
+    if game_state['status'] == 'onboarding' and len([p for p in players.values() if not p['is_admin']]) == 0:
+        game_state['status'] = 'lobby'
+        game_state['current_round'] = 0
+
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
-    
-    # Update admin view
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        socketio.emit('player_status_update', {
-            'players': [admin_player_status_row_with_round(p) for p in players.values()]
-        }, room=players[admin_session_id]['socket_id'])
+    notify_admin_player_list()
     
     print(f"Lobby cleared by admin - removed {len(players_to_remove)} players")
 
@@ -2892,9 +3094,8 @@ def handle_remove_player(data):
         emit('error', {'message': 'Only admin can remove players'})
         return
     
-    # Only remove if game is in lobby
-    if game_state['status'] != 'lobby':
-        emit('error', {'message': 'Can only remove players when game is in lobby state'})
+    if game_state['status'] not in ['lobby', 'onboarding']:
+        emit('error', {'message': 'Can only remove players when game is in lobby or onboarding'})
         return
     
     target_session_id = data.get('session_id')
@@ -2928,16 +3129,15 @@ def handle_remove_player(data):
     
     # Remove player from dictionary
     del players[target_session_id]
+
+    if game_state['status'] == 'onboarding' and len([p for p in players.values() if not p['is_admin']]) == 0:
+        game_state['status'] = 'lobby'
+        game_state['current_round'] = 0
     
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
-    
-    # Update admin view
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        socketio.emit('player_status_update', {
-            'players': [admin_player_status_row_with_round(p) for p in players.values()]
-        }, room=players[admin_session_id]['socket_id'])
+    notify_admin_player_list()
     
     print(f"Player {player_name} (session: {target_session_id}) removed by admin")
 
@@ -2950,7 +3150,11 @@ def handle_set_player_team(data):
     if session_id != admin_session_id:
         emit('error', {'message': 'Only admin can set player teams'})
         return
-    
+
+    if game_state['status'] not in ('lobby', 'onboarding'):
+        emit('error', {'message': 'Group changes are only allowed in the lobby or during onboarding practice.'})
+        return
+
     target_session_id = data.get('session_id')
     team = data.get('team')
     
@@ -2991,12 +3195,7 @@ def handle_set_player_team(data):
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
-    
-    # Update admin view
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        socketio.emit('player_status_update', {
-            'players': [admin_player_status_row_with_round(p) for p in players.values()]
-        }, room=players[admin_session_id]['socket_id'])
+    notify_admin_player_list()
     
     print(f"Admin set player {player.get('display_name', player['name'])} to team {team}")
 
@@ -3033,6 +3232,7 @@ def set_player_team_console(target_session_id: str, team: str):
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
     socketio.emit('lobby_players_update', {'players': lobby_players})
+    notify_admin_player_list()
     
     print(f"✅ Set player {player.get('display_name', player['name'])} to team {team}")
 
