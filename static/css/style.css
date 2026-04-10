@@ -119,9 +119,51 @@ body {
 
 .admin-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
     margin-top: 20px;
+}
+
+.post-game-survey-container {
+    max-width: 720px;
+    margin: 0 auto;
+    text-align: left;
+}
+
+.post-game-survey-title-main {
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.post-game-survey-intro {
+    text-align: center;
+    color: #495057;
+    margin-bottom: 20px;
+}
+
+.gameover-post-survey-hint {
+    text-align: center;
+    color: #495057;
+    margin: 16px 0;
+    font-size: 0.95rem;
+    max-width: 520px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: #fff;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: #5c636a;
+}
+
+.btn-secondary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .game-rules {
