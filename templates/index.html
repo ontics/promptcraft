@@ -31,6 +31,7 @@
                                     <button id="assign-teams-btn" class="btn btn-primary">Assign Groups</button>
                                     <button id="start-onboarding-btn" type="button" class="btn btn-onboarding">Start Onboarding</button>
                                     <button id="start-game-btn" class="btn btn-success">Start Game</button>
+                                    <button id="start-post-survey-btn" type="button" class="btn btn-secondary">Start post-game survey</button>
                                     <button id="restart-game-btn" class="btn btn-danger" style="margin-top: 10px;">🔄 Restart Game</button>
                                 </div>
                             </div>
@@ -320,7 +321,63 @@
                 <div id="final-results" class="final-results">
                 </div>
 
+                <p id="gameover-post-survey-hint" class="gameover-post-survey-hint" style="display: none;">The Gamemaster will open a short survey — stay on this screen until it appears, or complete it when prompted.</p>
+
                 <button id="back-to-home-btn" class="btn btn-success">Back to Home</button>
+            </div>
+        </div>
+
+        <!-- Post-game survey (non-admin, required when opened by Gamemaster) -->
+        <div id="post-game-survey-screen" class="screen">
+            <div class="container post-game-survey-container">
+                <h1 class="post-game-survey-title-main">Post-game survey</h1>
+                <p class="post-game-survey-intro">Please answer every question. All fields are required.</p>
+                <div id="post-game-survey-form-wrap">
+                    <fieldset class="lobby-survey-fieldset">
+                        <legend>1</legend>
+                        <p class="lobby-survey-prompt">What was your thought process when allocating points in voting?</p>
+                        <textarea id="post-free-q1" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                    </fieldset>
+                    <fieldset class="lobby-survey-fieldset">
+                        <legend>2</legend>
+                        <p class="lobby-survey-prompt">How did you decide when to give an image more or less points than another image in the same round of voting?</p>
+                        <textarea id="post-free-q2" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                    </fieldset>
+                    <fieldset class="lobby-survey-fieldset">
+                        <legend>3</legend>
+                        <p class="lobby-survey-prompt">During image creation, what information, if any, was displayed about your prompting?</p>
+                        <textarea id="post-free-q3" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                    </fieldset>
+                    <fieldset class="lobby-survey-fieldset">
+                        <legend>4</legend>
+                        <p class="lobby-survey-prompt">On the voting screen, what information, if any, was displayed about the images?</p>
+                        <textarea id="post-free-q4" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                    </fieldset>
+                    <fieldset class="lobby-survey-fieldset">
+                        <legend>5</legend>
+                        <p class="lobby-survey-prompt">The images I submitted for voting represented my best work:</p>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="strongly_disagree"> Strongly Disagree</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="disagree"> Disagree</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="neutral"> Neutral</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="agree"> Agree</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="strongly_agree"> Strongly Agree</label>
+                    </fieldset>
+                    <fieldset class="lobby-survey-fieldset">
+                        <legend>6</legend>
+                        <p class="lobby-survey-prompt">The images I submitted for voting represented significant effort on my part:</p>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="strongly_disagree"> Strongly Disagree</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="disagree"> Disagree</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="neutral"> Neutral</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="agree"> Agree</label>
+                        <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="strongly_agree"> Strongly Agree</label>
+                    </fieldset>
+                    <p id="post-game-survey-error" class="lobby-survey-error" style="display: none;" role="alert"></p>
+                    <button type="button" id="post-game-survey-submit-btn" class="btn btn-primary" disabled>Submit</button>
+                </div>
+                <div id="post-game-survey-done" class="lobby-survey-done" style="display: none;">
+                    <p>Thank you. Your responses have been recorded.</p>
+                    <button type="button" id="post-game-survey-back-btn" class="btn btn-success">Back to Home</button>
+                </div>
             </div>
         </div>
     </div>
