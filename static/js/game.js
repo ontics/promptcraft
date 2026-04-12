@@ -4,10 +4,15 @@ const socket = io();
 /** Study groups (must match app.py PLAYER_GROUPS). */
 const PLAYER_GROUPS = ['C_NA', 'C_HU', 'T_NA', 'T_HU'];
 
+function playerCondition(p) {
+    if (!p) return '';
+    return p.condition != null && p.condition !== '' ? p.condition : (p.team || '');
+}
+
 // Game state
 let gameState = {
     playerName: '',
-    playerTeam: '',
+    playerCondition: '',
     playerCharacter: '',
     currentRound: 0,
     selectedImageIndex: null,
@@ -31,15 +36,28 @@ let gameState = {
     inSelectionPhase: false,  // Track if we're in the selection phase (for late-arriving images)
     surveyCompleted: false,
     inOnboarding: false,
+    onboardingPhase: 'prompting', // 'prompting' | 'practice_voting' while inOnboarding
     onboardingMaxPrompts: 3,
-    onboardingPromptCount: 0
+    onboardingPromptCount: 0,
+    /** Live play only: show bullet slots under images when server sets image_context_bullets (never during onboarding). */
+    imageContextBulletsEnabled: false,
+    /** Server-authoritative allocation voting round index while on #voting-screen. */
+    allocationRoundIndex: 1,
 };
 
 let timerInterval;
-let allocationTimerInterval = null;
+
+function syncImageContextBulletsVisibility() {
+    const enabled = Boolean(gameState.imageContextBulletsEnabled) && !gameState.inOnboarding;
+    document.body.classList.toggle('image-context-bullets-enabled', enabled);
+    document.querySelectorAll('.gameplay-image-context-bullets').forEach((el) => {
+        el.setAttribute('aria-hidden', enabled ? 'false' : 'true');
+    });
+}
 
 function applyOnboardingGenerateState() {
     if (!gameState.inOnboarding || gameState.isAdmin) return;
+    if (gameState.onboardingPhase === 'practice_voting') return;
     const max = gameState.onboardingMaxPrompts || 3;
     const btn = document.getElementById('generate-btn');
     const input = document.getElementById('prompt-input');
@@ -116,12 +134,165 @@ function setOnboardingInstructionsPanelVisible(visible) {
 const screens = {
     lobby: document.getElementById('lobby-screen'),
     game: document.getElementById('game-screen'),
+    onboardingPracticeVoting: document.getElementById('onboarding-practice-voting-screen'),
     transition: document.getElementById('transition-screen'),
     selection: document.getElementById('selection-screen'),
     voting: document.getElementById('voting-screen'),
     results: document.getElementById('results-screen'),
     gameover: document.getElementById('gameover-screen')
 };
+
+/** Gamemaster Round Controls: full buttons for live play; onboarding prompting shows End Round only. */
+function setAdminRoundControlsForContext() {
+    const grp = document.getElementById('admin-game-controls');
+    const endBtn = document.getElementById('admin-end-round-btn');
+    const skipBtn = document.getElementById('admin-skip-voting-btn');
+    const nextBtn = document.getElementById('admin-next-round-btn');
+    if (!endBtn || !skipBtn || !nextBtn) return;
+
+    if (gameState.isAdmin && gameState.inOnboarding) {
+        if (grp) grp.style.display = 'block';
+        if (gameState.onboardingPhase === 'prompting') {
+            endBtn.style.display = '';
+            endBtn.textContent = 'End Round Early';
+            skipBtn.style.display = 'none';
+            nextBtn.style.display = 'none';
+        } else {
+            endBtn.style.display = 'none';
+            skipBtn.style.display = 'none';
+            nextBtn.style.display = 'none';
+        }
+    } else if (gameState.isAdmin) {
+        endBtn.style.display = '';
+        endBtn.textContent = 'End Round Early';
+        skipBtn.style.display = '';
+        nextBtn.style.display = '';
+    }
+}
+
+let obPracticeInputListenersBound = false;
+
+function getObPracticeValues() {
+    const out = [];
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById(`ob-practice-pts-${i}`);
+        const raw = el && el.value !== '' ? el.value : '0';
+        const n = parseInt(raw, 10);
+        out.push(Number.isFinite(n) ? Math.min(10, Math.max(0, n)) : 0);
+    }
+    return out;
+}
+
+function syncObPracticeRemaining(editedIndex) {
+    let vals = getObPracticeValues();
+    let sum = vals[0] + vals[1] + vals[2];
+    if (sum > 10 && editedIndex >= 0 && editedIndex <= 2) {
+        const overflow = sum - 10;
+        vals[editedIndex] = Math.max(0, vals[editedIndex] - overflow);
+        const el = document.getElementById(`ob-practice-pts-${editedIndex + 1}`);
+        if (el) el.value = String(vals[editedIndex]);
+        sum = vals[0] + vals[1] + vals[2];
+    }
+    updateAllocationPointsHeader(vals[0], vals[1], vals[2], 'ob-practice-header-points');
+    const btn = document.getElementById('ob-practice-submit-btn');
+    if (btn && btn.dataset.submitted !== '1') {
+        btn.disabled = sum !== 10;
+    }
+}
+
+function resetObPracticeVotingForm() {
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById(`ob-practice-pts-${i}`);
+        if (el) {
+            el.value = '0';
+            el.disabled = false;
+        }
+    }
+    const err = document.getElementById('ob-practice-vote-error');
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    const done = document.getElementById('ob-practice-vote-done');
+    if (done) done.style.display = 'none';
+    const submit = document.getElementById('ob-practice-submit-btn');
+    if (submit) {
+        submit.disabled = true;
+        submit.style.display = '';
+        delete submit.dataset.submitted;
+    }
+    syncObPracticeRemaining(0);
+}
+
+function applyObPracticeSubmittedState(points) {
+    const submit = document.getElementById('ob-practice-submit-btn');
+    if (submit) {
+        submit.style.display = 'none';
+        submit.dataset.submitted = '1';
+    }
+    for (let i = 0; i < 3; i++) {
+        const el = document.getElementById(`ob-practice-pts-${i + 1}`);
+        if (el) {
+            el.value = String(points[i] != null ? points[i] : 0);
+            el.disabled = true;
+        }
+    }
+    syncObPracticeRemaining(0);
+    const done = document.getElementById('ob-practice-vote-done');
+    if (done) done.style.display = 'block';
+}
+
+function initOnboardingPracticeVotingListeners() {
+    if (obPracticeInputListenersBound) return;
+    obPracticeInputListenersBound = true;
+    for (let i = 1; i <= 3; i++) {
+        const idx = i - 1;
+        document.getElementById(`ob-practice-pts-${i}`)?.addEventListener('input', () => {
+            syncObPracticeRemaining(idx);
+        });
+    }
+    document.getElementById('ob-practice-submit-btn')?.addEventListener('click', () => {
+        const vals = getObPracticeValues();
+        const err = document.getElementById('ob-practice-vote-error');
+        if (vals[0] + vals[1] + vals[2] !== 10) {
+            if (err) {
+                err.textContent = 'Assign exactly 10 points across the three images.';
+                err.style.display = 'block';
+            }
+            return;
+        }
+        if (err) err.style.display = 'none';
+        socket.emit('submit_onboarding_practice_points', { points: vals });
+    });
+}
+
+function showOnboardingPracticeVotingFromPayload(data) {
+    initOnboardingPracticeVotingListeners();
+    gameState.imageContextBulletsEnabled = false;
+    gameState.inOnboarding = true;
+    gameState.onboardingPhase = 'practice_voting';
+
+    const opts = data.option_images || [];
+    opts.forEach((row) => {
+        const slot = row.slot;
+        const el = document.getElementById(`ob-practice-opt-img-${slot}`);
+        if (el && row.url) el.src = row.url;
+    });
+    const img = document.getElementById('ob-practice-target-img');
+    if (img && data.target && data.target.url) {
+        img.src = data.target.url;
+        img.alt = 'Practice target';
+    }
+    if (data.already_submitted && Array.isArray(data.existing_points) && data.existing_points.length === 3) {
+        resetObPracticeVotingForm();
+        applyObPracticeSubmittedState(data.existing_points);
+    } else {
+        resetObPracticeVotingForm();
+    }
+
+    syncImageContextBulletsVisibility();
+    showScreen('onboardingPracticeVoting');
+}
 
 // Avatar images are embedded inline — no preloading or HTTP requests needed.
 
@@ -233,8 +404,11 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 // Utility function to show screen
 function showScreen(screenName) {
-    Object.values(screens).forEach(screen => screen.classList.remove('active'));
-    screens[screenName].classList.add('active');
+    Object.values(screens).forEach((screen) => {
+        if (screen) screen.classList.remove('active');
+    });
+    const next = screens[screenName];
+    if (next) next.classList.add('active');
     if (screenName === 'lobby') {
         showLobbySurveyForPlayer();
     }
@@ -398,7 +572,7 @@ socket.on('game_joined', (data) => {
         if (joinBtn) joinBtn.disabled = false;
 
         gameState.playerName = data.player.name;
-        gameState.playerTeam = data.player.team;
+        gameState.playerCondition = data.player.condition || data.player.team;
         gameState.playerCharacter = data.player.character;
         gameState.isAdmin = data.player.is_admin;
         gameState.surveyCompleted = data.player.survey_completed === true;
@@ -449,6 +623,7 @@ socket.on('admin_joined', (data) => {
     gameState.isAdmin = true;
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
 
     // Show admin screen in lobby
     const adminScreen = document.getElementById('admin-screen');
@@ -498,6 +673,7 @@ socket.on('admin_game_started', (data) => {
     if (adminGameControls) {
         adminGameControls.style.display = 'block';
     }
+    setAdminRoundControlsForContext();
     
     // Update admin status (no target description - removed)
     document.getElementById('admin-round').textContent = data.round;
@@ -527,6 +703,7 @@ socket.on('admin_game_started', (data) => {
 
 socket.on('admin_onboarding_started', (data) => {
     gameState.inOnboarding = true;
+    gameState.onboardingPhase = data.onboarding_phase === 'practice_voting' ? 'practice_voting' : 'prompting';
     gameState.currentRound = 0;
     gameState.roundEndTime = null;
     if (adminTimerInterval) {
@@ -538,18 +715,31 @@ socket.on('admin_onboarding_started', (data) => {
     if (adminScreen) adminScreen.style.display = 'block';
 
     const adminGameControls = document.getElementById('admin-game-controls');
-    if (adminGameControls) adminGameControls.style.display = 'none';
+    if (adminGameControls) adminGameControls.style.display = 'block';
+    setAdminRoundControlsForContext();
 
     const timeEl = document.getElementById('admin-time-remaining');
     if (timeEl) timeEl.textContent = '5:00';
 
     document.getElementById('admin-round').textContent = '—';
-    document.getElementById('admin-status').textContent = 'Onboarding (practice)';
+    document.getElementById('admin-status').textContent =
+        gameState.onboardingPhase === 'practice_voting'
+            ? 'Onboarding (practice voting)'
+            : 'Onboarding (practice)';
     document.getElementById('admin-target').textContent = 'Practice target';
 
     if (data.players) {
         updateAdminPlayerList(data.players);
     }
+});
+
+socket.on('admin_onboarding_practice_voting', () => {
+    if (!gameState.isAdmin) return;
+    gameState.inOnboarding = true;
+    gameState.onboardingPhase = 'practice_voting';
+    setAdminRoundControlsForContext();
+    const st = document.getElementById('admin-status');
+    if (st) st.textContent = 'Onboarding (practice voting)';
 });
 
 socket.on('admin_voting_started', (data) => {
@@ -560,6 +750,9 @@ socket.on('admin_voting_started', (data) => {
     if (adminScreen) {
         adminScreen.style.display = 'block';
     }
+    gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
+    setAdminRoundControlsForContext();
     
     // Store voting start time and duration for client-side calculation
     if (data.voting_start_time && data.voting_duration) {
@@ -591,7 +784,7 @@ socket.on('admin_voting_started', (data) => {
 socket.on('player_status_update', (data) => {
     console.log('player_status_update received:', data.players?.length || 0, 'players, isAdmin:', gameState.isAdmin);
     if (data.players) {
-        console.log('Team assignments in update:', data.players.map(p => ({name: p.name, team: p.team})));
+        console.log('Condition assignments in update:', data.players.map(p => ({name: p.name, condition: playerCondition(p)})));
     }
     if (gameState.isAdmin) {
         updateAdminPlayerList(data.players);
@@ -757,6 +950,7 @@ function updateAdminPlayerList(players) {
         const nonAdmin = players.filter((p) => !p.is_admin);
         if (nonAdmin.length === 0) {
             gameState.inOnboarding = false;
+            gameState.onboardingPhase = 'prompting';
             const timeEl = document.getElementById('admin-time-remaining');
             if (timeEl) timeEl.textContent = '-';
             const st = document.getElementById('admin-status');
@@ -856,31 +1050,30 @@ function updateAdminPlayerList(players) {
                 opt.textContent = g;
                 teamSelect.appendChild(opt);
             });
-            if (player.team === 'Green' || player.team === 'Orange') {
+            const pc = playerCondition(player);
+            if (pc === 'Green' || pc === 'Orange') {
                 const leg = document.createElement('option');
-                leg.value = player.team;
-                leg.textContent = `${player.team} (legacy)`;
+                leg.value = pc;
+                leg.textContent = `${pc} (legacy)`;
                 teamSelect.appendChild(leg);
             }
             
             // Set value AFTER options are added to ensure it works correctly
-            // Handle null/undefined team values - explicitly convert to empty string for "No group"
-            const teamValue = (player.team && (PLAYER_GROUPS.includes(player.team) || player.team === 'Green' || player.team === 'Orange')) ? player.team : '';
-            console.log(`Setting dropdown for ${player.name}: team="${player.team}" -> value="${teamValue}"`);
+            const teamValue = (pc && (PLAYER_GROUPS.includes(pc) || pc === 'Green' || pc === 'Orange')) ? pc : '';
+            console.log(`Setting dropdown for ${player.name}: condition="${pc}" -> value="${teamValue}"`);
             teamSelect.value = teamValue;
             
-            // Handle team change
+            // Handle condition change
             teamSelect.addEventListener('change', (e) => {
                 const newTeam = e.target.value;
-                if (newTeam && newTeam !== player.team) {
-                    if (confirm(`Change ${player.name}'s team to ${newTeam}?`)) {
+                if (newTeam && newTeam !== pc) {
+                    if (confirm(`Change ${player.name}'s condition to ${newTeam}?`)) {
                         socket.emit('set_player_team', {
                             session_id: player.session_id,
-                            team: newTeam
+                            condition: newTeam
                         });
                     } else {
-                        // Revert dropdown
-                        teamSelect.value = player.team || '';
+                        teamSelect.value = pc || '';
                     }
                 }
             });
@@ -889,7 +1082,7 @@ function updateAdminPlayerList(players) {
         } else {
             // Show team as text (not in lobby or during game)
             const teamSpan = document.createElement('span');
-            teamSpan.textContent = `(${player.team ? player.team : '?'})`;
+            teamSpan.textContent = `(${playerCondition(player) || '?'})`;
             teamSpan.style.cssText = 'color: #666; font-size: 12px;';
             nameRow.appendChild(teamSpan);
         }
@@ -901,6 +1094,9 @@ function updateAdminPlayerList(players) {
         if (!player.is_admin) {
             if (isInLobby) {
                 phaseBadge = `<br><small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
+            } else if (gameState.inOnboarding && gameState.onboardingPhase === 'practice_voting') {
+                const pv = player.practice_vote_submitted === true;
+                phaseBadge = `<br><small style="color: #1864ab; font-weight: 600;">${pv ? '✓ Practice points submitted' : 'Practice voting'}</small>`;
             } else if (gameState.inOnboarding) {
                 phaseBadge = '<br><small style="color: #1864ab; font-weight: 600;">Practice (onboarding)</small>';
             } else if (!selectionStatus && !voteStatus) {
@@ -949,7 +1145,11 @@ function updateAdminPlayerList(players) {
 
 // Admin control button handlers
 document.getElementById('admin-end-round-btn')?.addEventListener('click', () => {
-    if (confirm('End the current round early and move to image selection?')) {
+    const msg =
+        gameState.inOnboarding && gameState.onboardingPhase === 'prompting'
+            ? 'End practice prompting and open practice point distribution (10 points across three images)?'
+            : 'End the current round early and move to image selection?';
+    if (confirm(msg)) {
         socket.emit('admin_end_round');
     }
 });
@@ -996,7 +1196,7 @@ function updatePlayerList(players) {
             showBadge = true;
         } else {
             nonAdminCount++;
-            if (!player.team) {
+            if (!playerCondition(player)) {
             badgeText = 'Waiting';
             badgeStyle = 'background: #e0e0e0;';
                 showBadge = true;
@@ -1018,7 +1218,9 @@ function updatePlayerList(players) {
 socket.on('onboarding_started', (data) => {
     if (gameState.isAdmin) return;
 
+    gameState.imageContextBulletsEnabled = false;
     gameState.inOnboarding = true;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingMaxPrompts = data.max_prompts || 3;
     gameState.onboardingPromptCount = 0;
     gameState.currentRound = 1;
@@ -1054,7 +1256,19 @@ socket.on('onboarding_started', (data) => {
     }
 
     applyOnboardingGenerateState();
+    syncImageContextBulletsVisibility();
     showScreen('game');
+});
+
+socket.on('onboarding_practice_voting_started', (data) => {
+    if (gameState.isAdmin) return;
+    showOnboardingPracticeVotingFromPayload(data);
+});
+
+socket.on('onboarding_practice_points_saved', () => {
+    if (gameState.isAdmin) return;
+    const vals = getObPracticeValues();
+    applyObPracticeSubmittedState(vals);
 });
 
 socket.on('game_started', (data) => {
@@ -1064,6 +1278,7 @@ socket.on('game_started', (data) => {
     }
 
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
     const obHint = document.getElementById('onboarding-limit-hint');
@@ -1084,6 +1299,8 @@ socket.on('game_started', (data) => {
 
     // Reset selection phase flag for new round
     gameState.inSelectionPhase = false;
+
+    gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
     
     gameState.currentRound = data.round;
     gameState.generatedImages = [];
@@ -1163,6 +1380,7 @@ socket.on('game_started', (data) => {
     setupCharacterAvatar();
     }
 
+    syncImageContextBulletsVisibility();
     showScreen('game');
 
     // Start timer
@@ -1472,6 +1690,37 @@ socket.on('image_generated', (data) => {
                 }
             }
             applyOnboardingGenerateState();
+        } else {
+            const conversationArea = document.getElementById('conversation-area');
+            const imageContainers = conversationArea ? conversationArea.querySelectorAll('.image-container') : [];
+            if (imageContainers.length > 0) {
+                const lastContainer = imageContainers[imageContainers.length - 1];
+                if (lastContainer.querySelector('.image-loading')) {
+                    let inner = '<div class="image-result error-blank"></div>';
+                    if (data.show_prompting_heuristics && Array.isArray(data.per_image_heuristic_display) && data.per_image_heuristic_display.length) {
+                        const lines = data.per_image_heuristic_display.map((h) => {
+                            const lab = (h.label || '').replace(/</g, '&lt;');
+                            const val = (h.value || '').replace(/</g, '&lt;');
+                            return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
+                        }).join('');
+                        inner = `<div class="gen-img-row"><div class="gen-img-cell">${inner}</div><div class="heuristic-box">${lines}</div></div>`;
+                    }
+                    lastContainer.innerHTML = inner;
+                }
+            }
+            const aggPanelErr = document.getElementById('aggregate-heuristics-panel');
+            if (aggPanelErr && data.show_prompting_heuristics && Array.isArray(data.aggregate_heuristic_display) && data.aggregate_heuristic_display.length) {
+                aggPanelErr.style.display = 'block';
+                const lines = data.aggregate_heuristic_display.map((h) => {
+                    const lab = (h.label || '').replace(/</g, '&lt;');
+                    const val = (h.value || '').replace(/</g, '&lt;');
+                    return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
+                }).join('');
+                aggPanelErr.innerHTML = `<h4 class="aggregate-heuristics-title">Your round totals</h4>${lines}`;
+            }
+            if (conversationArea) {
+                conversationArea.scrollTop = conversationArea.scrollHeight;
+            }
         }
         return;
     }
@@ -1600,6 +1849,9 @@ function addImageToSelectionGallery(imgData, index) {
         const imageSrc = imgData.image_url || imgData.image_data || '';
         item.innerHTML = `
             <img src="${imageSrc}" alt="Generated image" ${imgData.prompt_id ? `data-prompt-id="${imgData.prompt_id}"` : ''}>
+            <div class="image-context-bullets gameplay-image-context-bullets" aria-hidden="true">
+                <ul class="image-context-bullets-list"></ul>
+            </div>
         `;
 
         item.addEventListener('click', () => {
@@ -1620,6 +1872,7 @@ function addImageToSelectionGallery(imgData, index) {
         });
 
         gallery.appendChild(item);
+        syncImageContextBulletsVisibility();
 }
 
 socket.on('image_url_updated', (data) => {
@@ -1670,6 +1923,8 @@ socket.on('voting_started', (data) => {
         return;
     }
     clearRoundTimerIfAny();
+    gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
+
     console.log('[CLIENT] Showing selection screen');
     
     // Mark that we're in selection phase (for late-arriving images)
@@ -1712,6 +1967,7 @@ socket.on('voting_started', (data) => {
             }
         });
     }
+    syncImageContextBulletsVisibility();
 
     // Always show default selection UI (green border on last valid image)
     // This is UI-only - the server won't submit it until timer expires or player confirms
@@ -1893,6 +2149,8 @@ socket.on('vote_on_images', (data) => {
     if (gameState.isAdmin) {
         return;
     }
+
+    gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
     
     showScreen('voting');
 
@@ -1915,7 +2173,10 @@ socket.on('vote_on_images', (data) => {
     }
 
     const gallery = document.getElementById('voting-gallery');
-    if (!gallery) return;
+    if (!gallery) {
+        syncImageContextBulletsVisibility();
+        return;
+    }
     
     gallery.innerHTML = '';
 
@@ -1925,6 +2186,7 @@ socket.on('vote_on_images', (data) => {
 
     if (otherPlayerImages.length === 0) {
         gallery.innerHTML = '<p>No other players to vote for!</p>';
+        syncImageContextBulletsVisibility();
         return;
     }
 
@@ -1946,6 +2208,9 @@ socket.on('vote_on_images', (data) => {
         const imageSrc = item.image.image_url || item.image.image_data || '';
         votingItem.innerHTML = `
             <img src="${imageSrc}" alt="Submission image">
+            <div class="image-context-bullets gameplay-image-context-bullets" aria-hidden="true">
+                <ul class="image-context-bullets-list"></ul>
+            </div>
         `;
 
         votingItem.addEventListener('click', () => {
@@ -1964,6 +2229,8 @@ socket.on('vote_on_images', (data) => {
 
         gallery.appendChild(votingItem);
     });
+
+    syncImageContextBulletsVisibility();
     
     // Add confirm vote button handler (using existing confirmVoteBtn variable)
     if (confirmVoteBtn) {
@@ -1989,53 +2256,25 @@ socket.on('vote_on_images', (data) => {
     }
 });
 
-function clearAllocationTimer() {
-    if (allocationTimerInterval) {
-        clearInterval(allocationTimerInterval);
-        allocationTimerInterval = null;
-    }
-}
-
-function startAllocationTimer(duration, startTime) {
-    const timerEl = document.getElementById('allocation-timer');
-    if (!timerEl) return;
-    clearAllocationTimer();
-    const serverStart = startTime || (Date.now() / 1000);
-    const tick = () => {
-        const elapsed = Date.now() / 1000 - serverStart;
-        const left = Math.max(0, Math.floor(duration - elapsed));
-        const m = Math.floor(left / 60);
-        const s = left % 60;
-        timerEl.textContent = `${m}:${s.toString().padStart(2, '0')}`;
-        if (left <= 0) {
-            clearAllocationTimer();
-            socket.emit('round_timer_check');
-        }
-    };
-    tick();
-    allocationTimerInterval = setInterval(tick, 500);
-}
-
-function updateAllocationPointsStatus(a, b, c) {
-    const el = document.getElementById('allocation-points-status');
+function updateAllocationPointsHeader(a, b, c, elementId) {
+    const el = document.getElementById(elementId || 'allocation-points-header');
     if (!el) return;
     const total = (parseInt(a, 10) || 0) + (parseInt(b, 10) || 0) + (parseInt(c, 10) || 0);
-    if (total < 100) {
-        el.textContent = `${100 - total} points left`;
-    } else if (total === 100) {
-        el.textContent = 'All 100 points assigned';
-    } else {
-        el.textContent = `${total - 100} points over 100`;
+    if (total > 10) {
+        el.textContent = `${total - 10} over — use exactly 10 points`;
+        return;
     }
+    const remaining = 10 - total;
+    el.textContent = `${remaining} ${remaining === 1 ? 'point' : 'points'} to allocate`;
 }
 
 socket.on('allocation_vote_started', (data) => {
     if (gameState.isAdmin) return;
     clearRoundTimerIfAny();
-    clearAllocationTimer();
     showScreen('voting');
-    const nameEl = document.getElementById('allocation-player-display-name');
-    if (nameEl) nameEl.textContent = gameState.playerName || '';
+    gameState.allocationRoundIndex = data.voting_round_index || 1;
+    const ins = document.getElementById('allocation-instructions');
+    if (ins) ins.textContent = 'Distribute points among the following images';
     const rn = document.getElementById('allocation-round-num');
     const rt = document.getElementById('allocation-round-total');
     if (rn) rn.textContent = String(data.voting_round_index || 1);
@@ -2047,7 +2286,15 @@ socket.on('allocation_vote_started', (data) => {
     const slots = document.getElementById('allocation-slots');
     if (!slots) return;
     slots.innerHTML = '';
-    const opts = data.options || [];
+    let opts = data.options || [];
+    if (opts.length !== 3) {
+        console.error('[CLIENT] allocation_vote_started: expected 3 options, got', opts.length, data);
+        opts = [
+            { image_url: '/static/voting_fixtures/HU/options/slot_a.svg', heuristic_display: [] },
+            { image_url: '/static/voting_fixtures/HU/options/slot_b.svg', heuristic_display: [] },
+            { image_url: '/static/voting_fixtures/HU/options/slot_c.svg', heuristic_display: [] },
+        ];
+    }
     opts.forEach((opt, idx) => {
         const col = document.createElement('div');
         col.className = 'allocation-slot';
@@ -2064,7 +2311,7 @@ socket.on('allocation_vote_started', (data) => {
             <div class="allocation-slot-img-wrap"><img src="${imgUrl}" alt="Option ${idx + 1}" class="allocation-opt-img"></div>
             ${heurHtml}
             <label class="allocation-pts-label">Points</label>
-            <input type="number" min="0" max="100" step="1" class="allocation-pts-input" data-slot="${idx}" value="0">
+            <input type="number" min="0" max="10" step="1" class="allocation-pts-input" data-slot="${idx}" value="0">
         `;
         slots.appendChild(col);
     });
@@ -2074,10 +2321,10 @@ socket.on('allocation_vote_started', (data) => {
             const inp = slots.querySelector(`.allocation-pts-input[data-slot="${i}"]`);
             return inp ? inp.value : '0';
         });
-        updateAllocationPointsStatus(v[0], v[1], v[2]);
+        updateAllocationPointsHeader(v[0], v[1], v[2], 'allocation-points-header');
         const t = (parseInt(v[0], 10) || 0) + (parseInt(v[1], 10) || 0) + (parseInt(v[2], 10) || 0);
         const btn = document.getElementById('confirm-allocation-btn');
-        if (btn) btn.disabled = t !== 100;
+        if (btn) btn.disabled = t !== 10;
     };
     inputs.forEach((inp) => inp.addEventListener('input', sync));
     sync();
@@ -2090,21 +2337,25 @@ socket.on('allocation_vote_started', (data) => {
                 const inp = slots.querySelector(`.allocation-pts-input[data-slot="${i}"]`);
                 return parseInt(inp && inp.value, 10) || 0;
             });
-            if (v[0] + v[1] + v[2] !== 100) return;
+            if (v[0] + v[1] + v[2] !== 10) return;
             socket.emit('submit_point_allocation', {
                 points_slot_1: v[0],
                 points_slot_2: v[1],
                 points_slot_3: v[2],
+                voting_round_index: gameState.allocationRoundIndex,
             });
             btn.disabled = true;
             btn.textContent = 'Submitted';
         };
     }
-    startAllocationTimer(data.duration || 120, data.start_time);
 });
 
-socket.on('allocation_saved', () => {
-    /* optional toast */
+socket.on('allocation_saved', (data) => {
+    if (gameState.isAdmin) return;
+    const ins = document.getElementById('allocation-instructions');
+    if (data && data.session_complete && data.waiting_for_others && ins) {
+        ins.textContent = 'All your voting rounds are complete. Waiting for other players to finish…';
+    }
 });
 
 socket.on('vote_cast', (data) => {
@@ -2175,7 +2426,6 @@ socket.on('game_over', (data) => {
     if (gameState.isAdmin) {
         return;
     }
-    clearAllocationTimer();
     showScreen('gameover');
 
     const finalResults = document.getElementById('final-results');
@@ -2234,6 +2484,7 @@ socket.on('game_restarted', (data) => {
     // Reset state
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
     gameState.selectedImageIndex = null;
@@ -2252,15 +2503,19 @@ socket.on('game_restarted_kick', (data) => {
     showScreen('lobby');
     
     // Clear all game state
+    gameState.imageContextBulletsEnabled = false;
+    syncImageContextBulletsVisibility();
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
+    resetObPracticeVotingForm();
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
     gameState.playerName = null;
-    gameState.playerTeam = null;
+    gameState.playerCondition = null;
     gameState.playerCharacter = null;
     gameState.isAdmin = false;
     gameState.hasConfirmedSelection = false;
@@ -2293,7 +2548,17 @@ socket.on('game_restarted_kick', (data) => {
 socket.on('error', (data) => {
     const joinBtn = document.getElementById('join-btn');
     if (joinBtn) joinBtn.disabled = false;
-    alert(data.message);
+    const msg = data && data.message ? data.message : 'Something went wrong.';
+    const obScreen = screens.onboardingPracticeVoting;
+    if (obScreen && obScreen.classList.contains('active')) {
+        const err = document.getElementById('ob-practice-vote-error');
+        if (err) {
+            err.textContent = msg;
+            err.style.display = 'block';
+            return;
+        }
+    }
+    alert(msg);
 });
 
 // Helper functions
@@ -2423,6 +2688,8 @@ socket.on('return_to_lobby', (data) => {
     // Return to lobby screen
     showScreen('lobby');
     // Reset game state
+    gameState.imageContextBulletsEnabled = false;
+    syncImageContextBulletsVisibility();
     gameState.inSelectionPhase = false;
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
@@ -2430,9 +2697,11 @@ socket.on('return_to_lobby', (data) => {
     gameState.tempVoteSelection = null;
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
     clearRoundTimerIfAny();
+    resetObPracticeVotingForm();
     const obHintRt = document.getElementById('onboarding-limit-hint');
     if (obHintRt) {
         obHintRt.style.display = 'none';

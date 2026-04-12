@@ -46,13 +46,19 @@ game_state = {
     'current_target': None,
     # Practice prompting before scored rounds (see start_onboarding)
     'onboarding_target': {'id': 0, 'url': '/static/images/onboarding-target.png'},
-    # Point-allocation voting (9 fixture rounds + 1 final)
-    'allocation_round_index': 0,
-    'allocation_voting_round_db_id': None,
-    'allocation_ballot_map': {},  # voter_session_id -> ballot_id (DB or synthetic int)
-    'allocation_slot_owners': {},  # voter_session_id -> [owner_sid slot1..3]
-    'allocation_submitted': None,  # set of session_ids for current allocation round
-    'allocation_duration': 120,
+    # Sub-phase when status == 'onboarding': 'prompting' | 'practice_voting'
+    'onboarding_phase': 'prompting',
+    # Point-allocation voting (9 fixture rounds + 1 final); each player advances independently
+    'allocation_round_db_ids': {},  # round_index -> voting_round_id
+    'allocation_round_submitters': {},  # round_index -> set(session_id) submitted that round
+    'allocation_points_recorded': set(),  # (voter_session_id, round_index) with saved points
+    'allocation_ballot_map': {},  # (voter_session_id, round_index) -> ballot_id
+    'allocation_slot_owners': {},  # (voter_session_id, round_index) -> [owner_sid x3]
+    'final_allocation_plan': None,  # voter -> [owner_sid x3] for round 10
+    # No visible countdown; value only caps auto-advance if clients stop polling (see round_timer_check).
+    'allocation_duration': 86400.0,
+    'allocation_session_started_at': None,  # time.time() when allocation phase begins
+    'allocation_experiment_finalized': False,
     '_synthetic_ballot_seq': 0,
 }
 
@@ -88,6 +94,16 @@ def get_unique_animal_alias() -> str:
     while f"{base} {suffix}" in existing_names:
         suffix += 1
     return f"{base} {suffix}"
+
+
+def use_stub_image_generation():
+    """Use local placeholder images instead of Gemini (no API key, or PROMPTCRAFT_STUB_IMAGE_GEN=1)."""
+    flag = os.getenv('PROMPTCRAFT_STUB_IMAGE_GEN', '').strip().lower()
+    if flag in ('1', 'true', 'yes', 'on'):
+        return True
+    key = os.getenv('GEMINI_API_KEY')
+    return not (key and str(key).strip())
+
 
 # Character messages
 # Bud messages - shown progressively based on prompt count (1-indexed: prompt_count = 1 shows message[0])
@@ -138,8 +154,18 @@ SPUDDY_ERROR_MESSAGE = "That prompt didn't go through. You could try again... or
 def generate_session_id():
     return os.urandom(16).hex()
 
-# Four study groups (stored in DB `team` and shown in admin). C_* = control; T_* = treatment.
+# Four study groups (stored in DB `condition` and shown in admin). C_* = control; T_* = treatment.
 PLAYER_GROUPS = ('C_NA', 'C_HU', 'T_NA', 'T_HU')
+
+# Study arms that see bullet context under images during live play (empty = hidden for everyone).
+IMAGE_CONTEXT_BULLET_TEAMS = frozenset()
+
+
+def player_gets_image_context_bullets(player):
+    """True when this player should see gameplay bullet slots under target / gallery images (not onboarding)."""
+    if not player or player.get('is_admin'):
+        return False
+    return player.get('condition') in IMAGE_CONTEXT_BULLET_TEAMS
 
 
 def is_control_group(team):
@@ -168,7 +194,7 @@ def get_character_for_round(player, current_round):
     """
     if current_round == 1:
         return 'Bud'
-    return 'Bud' if is_control_group(player.get('team')) else 'Spud'
+    return 'Bud' if is_control_group(player.get('condition')) else 'Spud'
 
 
 def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
@@ -205,7 +231,7 @@ def lobby_player_row(p, use_socket_id_key=False):
     ensure_survey_fields(p)
     row = {
         'name': p.get('display_name', p['name']),
-        'team': p['team'],
+        'condition': p['condition'],
         'is_admin': p['is_admin'],
     }
     if use_socket_id_key:
@@ -222,7 +248,7 @@ def admin_lobby_player_row(p):
     ensure_survey_fields(p)
     d = {
         'name': p.get('display_name', p['name']),
-        'team': p['team'],
+        'condition': p['condition'],
         'is_admin': p['is_admin'],
         'is_connected': p.get('socket_id') is not None,
         'session_id': p['session_id'],
@@ -238,12 +264,16 @@ def admin_player_status_row_with_round(p):
     cr = game_state.get('current_round', 0)
     st = game_state['status']
     if st == 'onboarding':
-        return {
+        phase = game_state.get('onboarding_phase', 'prompting')
+        row = {
             **admin_lobby_player_row(p),
             'prompts_submitted': len(p.get('onboarding_images', [])),
             'has_selected': None,
             'has_voted': None,
         }
+        if phase == 'practice_voting':
+            row['practice_vote_submitted'] = bool(p.get('onboarding_practice_submitted'))
+        return row
     include_game_state = st != 'lobby' and cr > 0
     row = {
         **admin_lobby_player_row(p),
@@ -283,6 +313,54 @@ def ensure_onboarding_player_fields(player):
     player.setdefault('onboarding_current_image', None)
     player.setdefault('onboarding_prompt_count', 0)
     player.setdefault('onboarding_has_successful', False)
+    player.setdefault('onboarding_practice_submitted', False)
+    player.setdefault('onboarding_practice_points', None)
+
+
+def onboarding_practice_voting_option_slots():
+    """Fixed option images for onboarding practice distribution (same paths as templates/index.html)."""
+    return [
+        {'slot': 1, 'label': 'Option 1', 'url': '/static/images/onboarding-practice-option-1.png'},
+        {'slot': 2, 'label': 'Option 2', 'url': '/static/images/onboarding-practice-option-2.png'},
+        {'slot': 3, 'label': 'Option 3', 'url': '/static/images/onboarding-practice-option-3.png'},
+    ]
+
+
+def emit_onboarding_practice_voting_to_player(player, socket_room):
+    """Send practice voting UI payload to one connected non-admin player."""
+    target = game_state.get('onboarding_target') or {'id': 0, 'url': '/static/images/onboarding-target.png'}
+    payload = {
+        'target': target,
+        'option_images': onboarding_practice_voting_option_slots(),
+        'existing_points': player.get('onboarding_practice_points'),
+        'already_submitted': bool(player.get('onboarding_practice_submitted')),
+        'show_voting_heuristics': heur_mod.show_voting_heuristics(player.get('condition')),
+    }
+    socketio.emit('onboarding_practice_voting_started', payload, room=socket_room)
+
+
+def broadcast_onboarding_practice_voting():
+    """Switch onboarding to practice voting and notify players + Gamemaster."""
+    game_state['onboarding_phase'] = 'practice_voting'
+    for p in players.values():
+        if p['is_admin']:
+            continue
+        p['onboarding_practice_points'] = None
+        p['onboarding_practice_submitted'] = False
+        sid = p.get('socket_id')
+        if sid:
+            emit_onboarding_practice_voting_to_player(p, sid)
+    if admin_session_id in players and players[admin_session_id].get('socket_id'):
+        adm = players[admin_session_id]['socket_id']
+        socketio.emit(
+            'admin_onboarding_practice_voting',
+            {
+                'phase': 'practice_voting',
+                'target': game_state.get('onboarding_target') or {'id': 0, 'url': '/static/images/onboarding-target.png'},
+            },
+            room=adm,
+        )
+    notify_admin_player_list()
 
 
 def onboarding_buddy_progress_message(onboarding_prompt_index):
@@ -514,23 +592,35 @@ def handle_join_game(data):
                         'target': game_state['current_target'],
                         'players': [{
                             'name': p.get('display_name', p['name']),
-                            'team': p['team'],
+                            'condition': p['condition'],
                             'is_connected': p.get('socket_id') is not None,
                             'session_id': p['session_id'],
                             'prompts_submitted': len(p['images'].get(game_state['current_round'], []))
                         } for p in players.values() if not p['is_admin']]
                     }, room=player['socket_id'])
                 elif game_state['status'] == 'onboarding':
+                    ob_phase = game_state.get('onboarding_phase', 'prompting')
                     socketio.emit('admin_onboarding_started', {
                         'target': game_state.get('onboarding_target'),
+                        'onboarding_phase': ob_phase,
                         'players': [{
                             'name': p.get('display_name', p['name']),
-                            'team': p['team'],
+                            'condition': p['condition'],
                             'is_connected': p.get('socket_id') is not None,
                             'session_id': p['session_id'],
                             'prompts_submitted': len(p.get('onboarding_images', [])),
+                            'practice_vote_submitted': bool(p.get('onboarding_practice_submitted')) if ob_phase == 'practice_voting' else None,
                         } for p in players.values() if not p['is_admin']]
                     }, room=player['socket_id'])
+                    if ob_phase == 'practice_voting':
+                        socketio.emit(
+                            'admin_onboarding_practice_voting',
+                            {
+                                'phase': 'practice_voting',
+                                'target': game_state.get('onboarding_target') or {'id': 0, 'url': '/static/images/onboarding-target.png'},
+                            },
+                            room=player['socket_id'],
+                        )
                 elif game_state['status'] in ['voting', 'voting_images', 'round_results']:
                     # Send current admin status
                     handle_admin_get_status()
@@ -539,32 +629,35 @@ def handle_join_game(data):
                 current_round = game_state['current_round']
                 if game_state['status'] == 'onboarding':
                     ensure_onboarding_player_fields(player)
-                    welcome = get_welcome_message(player, 1)
-                    char_payload = {
-                        'character': 'Bud',
-                        'animation_state': get_bud_animation_state(),
-                        'round': 1,
-                    }
-                    if welcome:
-                        char_payload['message'] = welcome
-                    socketio.emit('onboarding_started', {
-                        'target': game_state.get('onboarding_target'),
-                        'character': char_payload,
-                        'max_prompts': 3,
-                    }, room=player['socket_id'])
-                    for img_data in player.get('onboarding_images', []):
-                        image_url = img_data.get('image_url')
-                        socketio.emit('image_generated', {
-                            'image_data': img_data.get('image_data', '') if not image_url else '',
-                            'image_url': image_url,
-                            'ai_response': img_data.get('ai_response', ''),
-                            'prompt': img_data.get('prompt', ''),
-                            'image_index': player['onboarding_images'].index(img_data),
-                            'prompt_id': img_data.get('prompt_id'),
-                            'error_type': img_data.get('error_type'),
-                            'file_size_kb': img_data.get('file_size_kb'),
-                            'onboarding': True,
+                    if game_state.get('onboarding_phase') == 'practice_voting':
+                        emit_onboarding_practice_voting_to_player(player, player['socket_id'])
+                    else:
+                        welcome = get_welcome_message(player, 1)
+                        char_payload = {
+                            'character': 'Bud',
+                            'animation_state': get_bud_animation_state(),
+                            'round': 1,
+                        }
+                        if welcome:
+                            char_payload['message'] = welcome
+                        socketio.emit('onboarding_started', {
+                            'target': game_state.get('onboarding_target'),
+                            'character': char_payload,
+                            'max_prompts': 3,
                         }, room=player['socket_id'])
+                        for img_data in player.get('onboarding_images', []):
+                            image_url = img_data.get('image_url')
+                            socketio.emit('image_generated', {
+                                'image_data': img_data.get('image_data', '') if not image_url else '',
+                                'image_url': image_url,
+                                'ai_response': img_data.get('ai_response', ''),
+                                'prompt': img_data.get('prompt', ''),
+                                'image_index': player['onboarding_images'].index(img_data),
+                                'prompt_id': img_data.get('prompt_id'),
+                                'error_type': img_data.get('error_type'),
+                                'file_size_kb': img_data.get('file_size_kb'),
+                                'onboarding': True,
+                            }, room=player['socket_id'])
                 elif game_state['status'] == 'playing':
                     # Determine character for this round
                     character = get_character_for_round(player, current_round)
@@ -586,7 +679,8 @@ def handle_join_game(data):
                         'round': current_round,
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
-                        'character': character_data
+                        'character': character_data,
+                        'image_context_bullets': player_gets_image_context_bullets(player),
                     }, room=player['socket_id'])
                     # Restore their generated images
                     if player['images'].get(current_round):
@@ -652,10 +746,11 @@ def handle_join_game(data):
                             'round': current_round,
                             'duration': game_state.get('voting_duration', 30),
                             'start_time': selection_start_time,  # Synchronized start time
-                            'default_selected': current_round in player['selected_images']
+                            'default_selected': current_round in player['selected_images'],
+                            'image_context_bullets': player_gets_image_context_bullets(player),
                         }, room=player['socket_id'])
                 elif game_state['status'] == 'allocation_voting':
-                    cached = game_state.get('allocation_emit_cache', {}).get(session_id)
+                    cached = player.get('allocation_last_payload')
                     if cached and player.get('socket_id'):
                         socketio.emit('allocation_vote_started', cached, room=player['socket_id'])
                 elif game_state['status'] == 'voting_images':
@@ -695,7 +790,8 @@ def handle_join_game(data):
                         'images': selected_images,
                         'round': current_round,
                         'my_session_id': session_id,
-                        'target_image': {'url': target_image.get('url', '')}
+                        'target_image': {'url': target_image.get('url', '')},
+                        'image_context_bullets': player_gets_image_context_bullets(player),
                     }, room=player['socket_id'])
                 elif game_state['status'] == 'round_results':
                     # Show round results - this will broadcast to all connected players
@@ -739,7 +835,7 @@ def handle_join_game(data):
                                 'player_name': p.get('display_name', p['name']),
                                 'total_score': p['score'],
                                 'round_scores': p['round_scores'],
-                                'team': p['team'],
+                                'condition': p['condition'],
                                 'character': p['character'],
                                 'prompt_count': p['prompt_count']
                             })
@@ -764,7 +860,7 @@ def handle_join_game(data):
                 socketio.emit('game_joined', {
                     'player': {
                         'name': player.get('display_name', player['name']),
-                        'team': player['team'],
+                        'condition': player['condition'],
                         'character': player['character'],
                         'score': player['score'],
                         'is_admin': player['is_admin'],
@@ -832,7 +928,7 @@ def handle_join_game(data):
             if existing_player:
                 # Player exists in database - restore their team assignment
                 restored_player_id = existing_player.get('player_id')
-                team = existing_player.get('team')
+                team = existing_player.get('condition') or existing_player.get('team')
                 character = existing_player.get('character')
                 print(f"🔄 Restored player {player_name} from database: team={team}, old_id={restored_player_id}, new_id={session_id}")
                 
@@ -841,7 +937,7 @@ def handle_join_game(data):
                     game_id=game_state['game_id'],
                     player_id=session_id,
                     player_name=player_name,
-                    team=team,
+                    condition=team,
                     character=character
                 )
 
@@ -850,7 +946,7 @@ def handle_join_game(data):
             'socket_id': request.sid,
             'name': player_name,  # Internal name (may be admin code)
             'display_name': final_display_name,  # Display name (Gamemaster for admin)
-            'team': team,
+            'condition': team,
             'character': character,
             'score': 0,
             'round_scores': [0, 0, 0],
@@ -893,7 +989,7 @@ def handle_join_game(data):
         socketio.emit('game_joined', {
             'player': {
                 'name': player.get('display_name', player['name']),  # Use display_name
-                'team': player['team'],
+                'condition': player['condition'],
                 'character': player['character'],
                 'score': player['score'],
                 'is_admin': player['is_admin'],
@@ -910,19 +1006,24 @@ def handle_join_game(data):
 
         if game_state['status'] == 'onboarding':
             ensure_onboarding_player_fields(player)
-            welcome = get_welcome_message(player, 1)
-            char_payload = {
-                'character': 'Bud',
-                'animation_state': get_bud_animation_state(),
-                'round': 1,
-            }
-            if welcome:
-                char_payload['message'] = welcome
-            socketio.emit('onboarding_started', {
-                'target': game_state.get('onboarding_target'),
-                'character': char_payload,
-                'max_prompts': 3,
-            }, room=player['socket_id'])
+            if game_state.get('onboarding_phase') == 'practice_voting':
+                player['onboarding_practice_points'] = None
+                player['onboarding_practice_submitted'] = False
+                emit_onboarding_practice_voting_to_player(player, player['socket_id'])
+            else:
+                welcome = get_welcome_message(player, 1)
+                char_payload = {
+                    'character': 'Bud',
+                    'animation_state': get_bud_animation_state(),
+                    'round': 1,
+                }
+                if welcome:
+                    char_payload['message'] = welcome
+                socketio.emit('onboarding_started', {
+                    'target': game_state.get('onboarding_target'),
+                    'character': char_payload,
+                    'max_prompts': 3,
+                }, room=player['socket_id'])
 
     # Broadcast player list update to all (only if in lobby)
     if game_state['status'] == 'lobby' and lobby_players is not None:
@@ -971,6 +1072,7 @@ def handle_submit_pre_survey(data):
     player['survey_skills_text'] = skills
     if db.is_configured():
         gid = game_state.get('game_id')
+        db.upsert_experiment_pre_survey(session_id, prof, freq, skills, game_id=gid)
         if gid:
             db.update_player_pre_survey(gid, session_id, prof, freq, skills)
         else:
@@ -1025,7 +1127,7 @@ def handle_admin_login(data):
             'socket_id': request.sid,
             'name': required_admin_code,  # Internal name (code)
             'display_name': 'Gamemaster',
-            'team': None,
+            'condition': None,
             'character': None,
             'score': 0,
             'round_scores': [0, 0, 0],
@@ -1111,7 +1213,7 @@ def handle_assign_teams():
     # Clear team assignments for all remaining players (should only be connected ones now)
     for player in players.values():
         if not player['is_admin']:
-            player['team'] = None
+            player['condition'] = None
             player['character'] = None
     
     # Shuffle connected players for random assignment, then split into four balanced groups
@@ -1121,7 +1223,7 @@ def handle_assign_teams():
     for group_label, members in group_chunks:
         group_sizes.append(len(members))
         for player in members:
-            player['team'] = group_label
+            player['condition'] = group_label
             player['character'] = get_character(group_label)
     
     # Update players in database if game has started
@@ -1133,7 +1235,7 @@ def handle_assign_teams():
                     game_id=game_state['game_id'],
                     player_id=player['session_id'],
                     player_name=player['name'],
-                    team=player['team'],
+                    condition=player['condition'],
                     character=player['character']
                 )
     
@@ -1144,7 +1246,7 @@ def handle_assign_teams():
     # Update admin dashboard to show new team assignments
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         player_list = [admin_player_status_row_with_round(p) for p in players.values()]
-        print(f"[ASSIGN TEAMS] Sending player_status_update to admin with teams: {[(p['name'], p['team']) for p in player_list if not p['is_admin']]}")
+        print(f"[ASSIGN TEAMS] Sending player_status_update to admin with teams: {[(p['name'], p['condition']) for p in player_list if not p['is_admin']]}")
         notify_admin_player_list()
         # Also update admin status if game is in progress
         if game_state['status'] != 'lobby':
@@ -1166,7 +1268,7 @@ def handle_start_game():
     
     if game_state['status'] in ('lobby', 'onboarding') and len(non_admin_players) >= 1:
         # Make sure teams are assigned
-        players_without_teams = [p for p in non_admin_players if p['team'] is None]
+        players_without_teams = [p for p in non_admin_players if p['condition'] is None]
         if players_without_teams:
             emit('error', {'message': 'Please assign teams first'})
             return
@@ -1182,11 +1284,12 @@ def handle_start_game():
                         game_id=game_id,
                         player_id=player['session_id'],
                         player_name=player['name'],
-                        team=player['team'],
+                        condition=player['condition'],
                         character=player['character']
                     )
         
         game_state['status'] = 'playing'
+        game_state['onboarding_phase'] = 'prompting'
         game_state['current_round'] = 1
         game_state['current_target'] = game_state['target_images'][0]
         game_state['round_start_time'] = time.time()
@@ -1212,6 +1315,8 @@ def handle_start_game():
                 p['onboarding_current_image'] = None
                 p['onboarding_prompt_count'] = 0
                 p['onboarding_has_successful'] = False
+                p['onboarding_practice_points'] = None
+                p['onboarding_practice_submitted'] = False
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round 1")
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
@@ -1241,7 +1346,8 @@ def handle_start_game():
                         'round': 1,
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
-                        'character': character_data
+                        'character': character_data,
+                        'image_context_bullets': player_gets_image_context_bullets(p),
                     }, room=socket_id)
         
         # Send admin game started event with player status
@@ -1254,7 +1360,7 @@ def handle_start_game():
                 'round_end_time': game_state.get('round_end_time'),  # Include end time for client calculation
                 'players': [{
                     'name': p.get('display_name', p['name']),
-                    'team': p['team'],
+                    'condition': p['condition'],
                     'is_connected': p.get('socket_id') is not None,
                     'session_id': p['session_id'],
                     'prompts_submitted': len(p['images'].get(1, []))
@@ -1281,12 +1387,13 @@ def handle_start_onboarding():
         emit('error', {'message': 'Need at least one player to start onboarding'})
         return
 
-    players_without_teams = [p for p in non_admin_players if p['team'] is None]
+    players_without_teams = [p for p in non_admin_players if p['condition'] is None]
     if players_without_teams:
         emit('error', {'message': 'Please assign groups first'})
         return
 
     game_state['status'] = 'onboarding'
+    game_state['onboarding_phase'] = 'prompting'
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
@@ -1300,6 +1407,8 @@ def handle_start_onboarding():
         p['onboarding_current_image'] = None
         p['onboarding_prompt_count'] = 0
         p['onboarding_has_successful'] = False
+        p['onboarding_practice_points'] = None
+        p['onboarding_practice_submitted'] = False
 
     for p in players.values():
         if p['is_admin'] or not p.get('socket_id'):
@@ -1327,10 +1436,11 @@ def handle_start_onboarding():
             'admin_onboarding_started',
             {
                 'target': target,
+                'onboarding_phase': 'prompting',
                 'players': [
                     {
                         'name': p.get('display_name', p['name']),
-                        'team': p['team'],
+                        'condition': p['condition'],
                         'is_connected': p.get('socket_id') is not None,
                         'session_id': p['session_id'],
                         'prompts_submitted': len(p.get('onboarding_images', [])),
@@ -1364,6 +1474,9 @@ def handle_send_prompt(data):
 
     if is_onboarding:
         ensure_onboarding_player_fields(player)
+        if game_state.get('onboarding_phase') == 'practice_voting':
+            emit('error', {'message': 'Practice voting is in progress — prompts are closed.'})
+            return
         if len(player['onboarding_images']) >= 3:
             emit('error', {'message': 'Practice limit reached (3 prompts).'})
             return
@@ -1420,7 +1533,7 @@ def handle_send_prompt(data):
     if is_onboarding:
         emit('character_message', character_data)
 
-    # Generate image using Gemini
+    # Generate image via Gemini when configured, else local placeholder (see use_stub_image_generation).
     try:
         if is_onboarding:
             conversation = player['onboarding_conversation']
@@ -1429,147 +1542,247 @@ def handle_send_prompt(data):
             conversation = player['conversation_history'][current_round]
             current_image_obj = player['current_image'][current_round]
 
-        client = google_genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+        skip_api = use_stub_image_generation()
 
-        print(f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {ph_round}, onboarding={is_onboarding}, Has current_image: {current_image_obj is not None}")
-        
-        # Construct contents array: include previous image if exists, otherwise just prompt
-        # IMPORTANT: No target description or context is added - only the user's prompt is sent
-        # Conversation history is NOT included in the API request - only the current prompt
-        if current_image_obj:
-            # We have a previous image - this is a refinement request
-            # Convert PIL Image to base64 for API
-            buffered = io.BytesIO()
-            current_image_obj.save(buffered, format="PNG")
-            img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            
-            # Create proper content structure for Gemini API
-            contents = [
-                {
-                    "inline_data": {
-                        "mime_type": "image/png",
-                        "data": img_base64
-                    }
-                },
-                prompt
-            ]
-            print(f"[API REQUEST] Refining image - Prompt sent to API: '{prompt}' (NO target context)")
-        else:
-            # First image generation - use prompt directly (NO target theme, NO target description)
-            contents = [prompt]
-            print(f"[API REQUEST] New image - Prompt sent to API: '{prompt}' (NO target context)")
-        
-        # Generate image using gemini-2.5-flash-image model
-        try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash-image",
-                contents=contents
-            )
-            
-            # Validate game state and player still exist (in case game was restarted during API call)
-            # Allow processing during 'playing', 'transitioning', and 'voting' states since:
-            # - Prompt was submitted during valid 'playing' state (or buffer period)
-            # - Image should still be included in selection gallery even if it arrives late
-            # - We're still in the same round (not a new round or game restart)
+        if skip_api:
             if game_state['status'] not in ['playing', 'transitioning', 'voting', 'onboarding']:
-                print(f"[WARNING] API response received but game is in invalid state (status: {game_state['status']}). Discarding response.")
+                print(f"[WARNING] Stub image discarded — game status {game_state['status']}")
                 return
-            
             if session_id not in players:
-                print(f"[WARNING] API response received but player {session_id[:8]}... no longer exists. Discarding response.")
                 return
-            
+            # Stub must work without Supabase: DB writes are gated later; do not return here.
             if not is_onboarding and (not game_state.get('game_id') or not game_state.get('round_id')):
-                print(f"[WARNING] API response received but game_id or round_id is None. Discarding response.")
-                return
+                print('[STUB] No game_id/round_id — emitting in-memory placeholder (DB save skipped)')
+            print(f"[STUB] Placeholder for {player['name']}, r{ph_round}, onboarding={is_onboarding}")
+            image_data = create_placeholder_image(prompt, ph_round)
+            _, b64part = image_data.split(',', 1)
+            image_bytes = base64.b64decode(b64part)
+            file_size_kb = get_file_size_kb(image_bytes)
+            error_type = None
+            error_message = None
+            finish_reason = None
+            safety_ratings = None
+            ai_response = (
+                'Placeholder image (stub: no GEMINI_API_KEY, or PROMPTCRAFT_STUB_IMAGE_GEN=1).'
+            )
+            pil_img = Image.open(io.BytesIO(image_bytes))
+            if is_onboarding:
+                player['onboarding_current_image'] = pil_img
+                player['onboarding_has_successful'] = True
+            else:
+                player['current_image'][current_round] = pil_img
+                player['has_successful_prompt'][current_round] = True
+        else:
+            client = google_genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
+
+            print(f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {ph_round}, onboarding={is_onboarding}, Has current_image: {current_image_obj is not None}")
+        
+            # Construct contents array: include previous image if exists, otherwise just prompt
+            # IMPORTANT: No target description or context is added - only the user's prompt is sent
+            # Conversation history is NOT included in the API request - only the current prompt
+            if current_image_obj:
+                # We have a previous image - this is a refinement request
+                # Convert PIL Image to base64 for API
+                buffered = io.BytesIO()
+                current_image_obj.save(buffered, format="PNG")
+                img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
             
-            # Extract error information from API response FIRST (before processing image)
-            api_error_type, api_error_message, finish_reason, safety_ratings = extract_api_error_info(response)
+                # Create proper content structure for Gemini API
+                contents = [
+                    {
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": img_base64
+                        }
+                    },
+                    prompt
+                ]
+                print(f"[API REQUEST] Refining image - Prompt sent to API: '{prompt}' (NO target context)")
+            else:
+                # First image generation - use prompt directly (NO target theme, NO target description)
+                contents = [prompt]
+                print(f"[API REQUEST] New image - Prompt sent to API: '{prompt}' (NO target context)")
+        
+            # Generate image using gemini-2.5-flash-image model
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash-image",
+                    contents=contents
+                )
             
-            # Debug: Print response structure and error info
-            print(f"[API RESPONSE] Response type: {type(response)}")
-            if finish_reason:
-                print(f"[API RESPONSE] finish_reason: {finish_reason}")
-            if api_error_type:
-                print(f"[API RESPONSE] Error detected: {api_error_type} - {api_error_message}")
+                # Validate game state and player still exist (in case game was restarted during API call)
+                # Allow processing during 'playing', 'transitioning', and 'voting' states since:
+                # - Prompt was submitted during valid 'playing' state (or buffer period)
+                # - Image should still be included in selection gallery even if it arrives late
+                # - We're still in the same round (not a new round or game restart)
+                if game_state['status'] not in ['playing', 'transitioning', 'voting', 'onboarding']:
+                    print(f"[WARNING] API response received but game is in invalid state (status: {game_state['status']}). Discarding response.")
+                    return
             
-            # Extract the image data from response
-            image_data = None
-            image_bytes = None
-            file_size_kb = None
-            ai_response = "Image generated successfully"
-            error_type = api_error_type
-            error_message = api_error_message
+                if session_id not in players:
+                    print(f"[WARNING] API response received but player {session_id[:8]}... no longer exists. Discarding response.")
+                    return
             
-            if response.candidates and len(response.candidates) > 0:
-                for part in response.candidates[0].content.parts:
-                    if hasattr(part, 'inline_data') and part.inline_data is not None:
-                        # The data might already be base64 or might be bytes
-                        img_data = part.inline_data.data
+                if not is_onboarding and (not game_state.get('game_id') or not game_state.get('round_id')):
+                    print("[WARNING] API response but game_id or round_id is None — emitting image; DB save will be skipped")
+
+                # Extract error information from API response FIRST (before processing image)
+                api_error_type, api_error_message, finish_reason, safety_ratings = extract_api_error_info(response)
+            
+                # Debug: Print response structure and error info
+                print(f"[API RESPONSE] Response type: {type(response)}")
+                if finish_reason:
+                    print(f"[API RESPONSE] finish_reason: {finish_reason}")
+                if api_error_type:
+                    print(f"[API RESPONSE] Error detected: {api_error_type} - {api_error_message}")
+            
+                # Extract the image data from response
+                image_data = None
+                image_bytes = None
+                file_size_kb = None
+                ai_response = "Image generated successfully"
+                error_type = api_error_type
+                error_message = api_error_message
+            
+                if response.candidates and len(response.candidates) > 0:
+                    for part in response.candidates[0].content.parts:
+                        if hasattr(part, 'inline_data') and part.inline_data is not None:
+                            # The data might already be base64 or might be bytes
+                            img_data = part.inline_data.data
                         
-                        # Decode to bytes for analysis
-                        if isinstance(img_data, str):
-                            image_bytes = base64.b64decode(img_data)
-                            image_data = f"data:image/png;base64,{img_data}"
-                        elif isinstance(img_data, bytes):
-                            image_bytes = img_data
-                            image_b64 = base64.b64encode(img_data).decode('utf-8')
-                            image_data = f"data:image/png;base64,{image_b64}"
-                        else:
-                            print(f"Unexpected data type: {type(img_data)}")
-                            continue
+                            # Decode to bytes for analysis
+                            if isinstance(img_data, str):
+                                image_bytes = base64.b64decode(img_data)
+                                image_data = f"data:image/png;base64,{img_data}"
+                            elif isinstance(img_data, bytes):
+                                image_bytes = img_data
+                                image_b64 = base64.b64encode(img_data).decode('utf-8')
+                                image_data = f"data:image/png;base64,{image_b64}"
+                            else:
+                                print(f"Unexpected data type: {type(img_data)}")
+                                continue
                         
-                        # Calculate file size
-                        if image_bytes:
-                            file_size_kb = get_file_size_kb(image_bytes)
-                            print(f"[IMAGE SIZE] File size: {file_size_kb:.2f} KB")
+                            # Calculate file size
+                            if image_bytes:
+                                file_size_kb = get_file_size_kb(image_bytes)
+                                print(f"[IMAGE SIZE] File size: {file_size_kb:.2f} KB")
                             
-                            # Check if image is suspiciously small (likely placeholder)
-                            if is_small_image(file_size_kb, threshold_kb=50):
-                                if not error_type:  # Don't override API error if already set
-                                    error_type = 'small_image'
-                                    error_message = f'Image is unusually small ({file_size_kb:.2f} KB), likely a placeholder or policy violation response'
-                                print(f"[WARNING] Small image detected: {file_size_kb:.2f} KB")
+                                # Check if image is suspiciously small (likely placeholder)
+                                if is_small_image(file_size_kb, threshold_kb=50):
+                                    if not error_type:  # Don't override API error if already set
+                                        error_type = 'small_image'
+                                        error_message = f'Image is unusually small ({file_size_kb:.2f} KB), likely a placeholder or policy violation response'
+                                    print(f"[WARNING] Small image detected: {file_size_kb:.2f} KB")
                         
-                        # Only store as current_image if it's valid (not an error)
-                        if not error_type and not is_small_image(file_size_kb, threshold_kb=50):
-                            pil_img = Image.open(io.BytesIO(image_bytes))
-                            if is_onboarding:
-                                player['onboarding_current_image'] = pil_img
-                                player['onboarding_has_successful'] = True
+                            # Only store as current_image if it's valid (not an error)
+                            if not error_type and not is_small_image(file_size_kb, threshold_kb=50):
+                                pil_img = Image.open(io.BytesIO(image_bytes))
+                                if is_onboarding:
+                                    player['onboarding_current_image'] = pil_img
+                                    player['onboarding_has_successful'] = True
+                                else:
+                                    player['current_image'][current_round] = pil_img
+                                    player['has_successful_prompt'][current_round] = True
+                                print(f"[DEBUG] Stored new image for player {player['name']} (session: {session_id[:8]}...), round {ph_round}, successful prompt")
                             else:
-                                player['current_image'][current_round] = pil_img
-                                player['has_successful_prompt'][current_round] = True
-                            print(f"[DEBUG] Stored new image for player {player['name']} (session: {session_id[:8]}...), round {ph_round}, successful prompt")
-                        else:
-                            if is_onboarding:
-                                player['onboarding_current_image'] = None
-                            else:
-                                player['current_image'][current_round] = None
-                            print(f"[DEBUG] Not storing image for refinement due to error: {error_type}")
+                                if is_onboarding:
+                                    player['onboarding_current_image'] = None
+                                else:
+                                    player['current_image'][current_round] = None
+                                print(f"[DEBUG] Not storing image for refinement due to error: {error_type}")
                         
-                        break
+                            break
             
-            # Handle cases where no image was returned
-            if image_data is None:
-                if not error_type:
-                    error_type = 'no_image_in_response'
-                    error_message = 'API returned success but no image data'
-                print(f"[ERROR] No image in response for player {player['name']}, error_type: {error_type}")
-                image_data = create_placeholder_image(prompt, ph_round)
-                # Don't set ai_response here - will be set based on error_type below
+                # Handle cases where no image was returned
+                if image_data is None:
+                    if not error_type:
+                        error_type = 'no_image_in_response'
+                        error_message = 'API returned success but no image data'
+                    print(f"[ERROR] No image in response for player {player['name']}, error_type: {error_type}")
+                    image_data = create_placeholder_image(prompt, ph_round)
+                    # Don't set ai_response here - will be set based on error_type below
             
-            # Set user-friendly response message based on error type
-            if error_type:
-                if error_type == 'policy_violation':
-                    ai_response = "Your prompt may have violated content policies. Please try a different prompt."
-                elif error_type == 'small_image':
-                    ai_response = "Image generation returned an invalid result. Please try a different prompt."
-                elif error_type in ['api_error', 'no_image_in_response', 'no_candidates']:
-                    ai_response = "Image generation encountered an error. Please try again."
-                else:
-                    ai_response = "Image generation encountered an issue. Please try again."
+                # Set user-friendly response message based on error type
+                if error_type:
+                    if error_type == 'policy_violation':
+                        ai_response = "Your prompt may have violated content policies. Please try a different prompt."
+                    elif error_type == 'small_image':
+                        ai_response = "Image generation returned an invalid result. Please try a different prompt."
+                    elif error_type in ['api_error', 'no_image_in_response', 'no_candidates']:
+                        ai_response = "Image generation encountered an error. Please try again."
+                    else:
+                        ai_response = "Image generation encountered an issue. Please try again."
                 
+                    cr_msg = 1 if is_onboarding else current_round
+                    character_error_message = get_character_error_message(player, cr_msg)
+                    character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
+
+                    character_data = {
+                        'character': character,
+                        'message': character_error_message,
+                        'round': 1 if is_onboarding else current_round,
+                    }
+
+                    prompt_count_err = opc if is_onboarding else player.get('prompt_count', 0)
+                    has_successful_prompt = (
+                        player.get('onboarding_has_successful', False)
+                        if is_onboarding
+                        else player.get('has_successful_prompt', {}).get(current_round, False)
+                    )
+
+                    if character == 'Bud':
+                        character_data['animation_state'] = get_bud_animation_state()
+                    elif character == 'Spud':
+                        plant_state = get_spud_plant_state(prompt_count_err, has_successful_prompt)
+                        character_data['plant_state'] = plant_state
+                        character_data['animation_state'] = get_spud_animation_state(
+                            prompt_count_err, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
+                        )
+                        character_data['prompt_count'] = prompt_count_err
+
+                    if is_onboarding:
+                        socketio.emit('character_message', character_data, room=player['socket_id'])
+
+                    socketio.emit('image_generation_error', {
+                        'message': character_error_message,
+                        'error_type': error_type,
+                        'suggest_retry': True
+                    }, room=player['socket_id'])
+
+                    error_entry = {
+                        'round': 0 if is_onboarding else current_round,
+                        'timestamp': time.time(),
+                        'error_type': error_type,
+                        'prompt': prompt,
+                        'error_message': error_message,
+                        'finish_reason': finish_reason,
+                        'file_size_kb': file_size_kb
+                    }
+                    player['image_generation_errors'].append(error_entry)
+                    print(f"[ERROR TRACKING] Player {player['name']}: {error_type} - {error_message}")
+                else:
+                    # Success case - update character state after successful image generation
+                    ai_response = "Image generated successfully"
+
+            except Exception as img_error:
+                print(f"Image generation error: {img_error}")
+                error_type = 'exception'
+                error_message = str(img_error)
+                error_entry = {
+                    'round': 0 if is_onboarding else current_round,
+                    'timestamp': time.time(),
+                    'error_type': error_type,
+                    'prompt': prompt,
+                    'error_message': error_message
+                }
+                player['image_generation_errors'].append(error_entry)
+                print(f"[ERROR TRACKING] Player {player['name']}: Exception in round {ph_round}: {img_error}")
+                image_data = create_placeholder_image(prompt, ph_round)
+                file_size_kb = None
+                finish_reason = None
+                safety_ratings = None
+                ai_response = "Image generation encountered an error. Please try again."
+
                 cr_msg = 1 if is_onboarding else current_round
                 character_error_message = get_character_error_message(player, cr_msg)
                 character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
@@ -1580,7 +1793,7 @@ def handle_send_prompt(data):
                     'round': 1 if is_onboarding else current_round,
                 }
 
-                prompt_count_err = opc if is_onboarding else player.get('prompt_count', 0)
+                prompt_count = opc if is_onboarding else player.get('prompt_count', 0)
                 has_successful_prompt = (
                     player.get('onboarding_has_successful', False)
                     if is_onboarding
@@ -1590,90 +1803,20 @@ def handle_send_prompt(data):
                 if character == 'Bud':
                     character_data['animation_state'] = get_bud_animation_state()
                 elif character == 'Spud':
-                    plant_state = get_spud_plant_state(prompt_count_err, has_successful_prompt)
+                    plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
                     character_data['plant_state'] = plant_state
                     character_data['animation_state'] = get_spud_animation_state(
-                        prompt_count_err, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
+                        prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
                     )
-                    character_data['prompt_count'] = prompt_count_err
+                    character_data['prompt_count'] = prompt_count
 
                 if is_onboarding:
                     socketio.emit('character_message', character_data, room=player['socket_id'])
-
                 socketio.emit('image_generation_error', {
                     'message': character_error_message,
                     'error_type': error_type,
                     'suggest_retry': True
                 }, room=player['socket_id'])
-
-                error_entry = {
-                    'round': 0 if is_onboarding else current_round,
-                    'timestamp': time.time(),
-                    'error_type': error_type,
-                    'prompt': prompt,
-                    'error_message': error_message,
-                    'finish_reason': finish_reason,
-                    'file_size_kb': file_size_kb
-                }
-                player['image_generation_errors'].append(error_entry)
-                print(f"[ERROR TRACKING] Player {player['name']}: {error_type} - {error_message}")
-            else:
-                # Success case - update character state after successful image generation
-                ai_response = "Image generated successfully"
-
-        except Exception as img_error:
-            print(f"Image generation error: {img_error}")
-            error_type = 'exception'
-            error_message = str(img_error)
-            error_entry = {
-                'round': 0 if is_onboarding else current_round,
-                'timestamp': time.time(),
-                'error_type': error_type,
-                'prompt': prompt,
-                'error_message': error_message
-            }
-            player['image_generation_errors'].append(error_entry)
-            print(f"[ERROR TRACKING] Player {player['name']}: Exception in round {ph_round}: {img_error}")
-            image_data = create_placeholder_image(prompt, ph_round)
-            file_size_kb = None
-            finish_reason = None
-            safety_ratings = None
-            ai_response = "Image generation encountered an error. Please try again."
-
-            cr_msg = 1 if is_onboarding else current_round
-            character_error_message = get_character_error_message(player, cr_msg)
-            character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
-
-            character_data = {
-                'character': character,
-                'message': character_error_message,
-                'round': 1 if is_onboarding else current_round,
-            }
-
-            prompt_count = opc if is_onboarding else player.get('prompt_count', 0)
-            has_successful_prompt = (
-                player.get('onboarding_has_successful', False)
-                if is_onboarding
-                else player.get('has_successful_prompt', {}).get(current_round, False)
-            )
-
-            if character == 'Bud':
-                character_data['animation_state'] = get_bud_animation_state()
-            elif character == 'Spud':
-                plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
-                character_data['plant_state'] = plant_state
-                character_data['animation_state'] = get_spud_animation_state(
-                    prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
-                )
-                character_data['prompt_count'] = prompt_count
-
-            if is_onboarding:
-                socketio.emit('character_message', character_data, room=player['socket_id'])
-            socketio.emit('image_generation_error', {
-                'message': character_error_message,
-                'error_type': error_type,
-                'suggest_retry': True
-            }, room=player['socket_id'])
 
         # Store conversation
         conversation.append({'role': 'user', 'content': prompt})
@@ -1686,6 +1829,12 @@ def handle_send_prompt(data):
 
         prompt_index = len(image_bucket) + 1
 
+        prompt_elapsed = 0
+        if not is_onboarding:
+            rs = game_state.get('round_start_time')
+            if rs:
+                prompt_elapsed = int(max(0, min(300, time.time() - rs)))
+
         image_entry = {
             'prompt': prompt,
             'image_data': image_data,
@@ -1694,7 +1843,8 @@ def handle_send_prompt(data):
             'prompt_id': None,
             'prompt_index': prompt_index,
             'error_type': error_type,
-            'file_size_kb': file_size_kb
+            'file_size_kb': file_size_kb,
+            'prompt_sent_elapsed_seconds': prompt_elapsed,
         }
         image_bucket.append(image_entry)
 
@@ -1705,18 +1855,14 @@ def handle_send_prompt(data):
                 prompt_index=prompt_index,
                 prompt_text=prompt,
                 images_before_and_including=image_bucket,
+                prompt_elapsed_seconds=prompt_elapsed,
             )
             image_entry['heuristic_snapshot'] = snap
             valid_for_agg = [im for im in image_bucket if not im.get('error_type')]
-            complexities = [
-                heur_mod.placeholder_perplexity_normalized(im.get('prompt', ''), im.get('prompt_index') or 1)
-                for im in valid_for_agg
-            ]
             tw = sum(heur_mod.word_count(im.get('prompt', '')) for im in valid_for_agg)
             agg = heur_mod.aggregate_snapshot_for_round(
                 total_prompts=len(valid_for_agg),
                 total_words=tw,
-                complexities=complexities or [0.0],
             )
 
         # Save prompt to database and trigger async image upload
@@ -1726,7 +1872,6 @@ def handle_send_prompt(data):
             
             # Save prompt to database (without image_url initially, with error info)
             wc = heur_mod.word_count(prompt)
-            ppn = heur_mod.placeholder_perplexity_normalized(prompt, prompt_index)
             prompt_id = db.save_prompt_sync(
                 game_id=game_state['game_id'],
                 round_id=game_state['round_id'],
@@ -1743,7 +1888,7 @@ def handle_send_prompt(data):
                 file_size_kb=file_size_kb,
                 safety_ratings=safety_ratings,
                 word_count=wc,
-                perplexity_normalized=ppn,
+                prompt_sent_elapsed_seconds=prompt_elapsed,
             )
             
             # Update image_entry with prompt_id
@@ -1795,12 +1940,12 @@ def handle_send_prompt(data):
             'onboarding': is_onboarding,
         }
         if not is_onboarding:
-            ig_payload['show_prompting_heuristics'] = heur_mod.show_prompting_heuristics(player.get('team'))
+            ig_payload['show_prompting_heuristics'] = heur_mod.show_prompting_heuristics(player.get('condition'))
             ig_payload['per_image_heuristic_display'] = (
                 heur_mod.format_snapshot_for_ui(snap) if snap else []
             )
             ig_payload['aggregate_heuristic_display'] = (
-                heur_mod.format_snapshot_for_ui(agg) if agg else []
+                heur_mod.format_aggregate_for_ui(agg) if agg else []
             )
         socketio.emit('image_generated', ig_payload, room=player['socket_id'])
 
@@ -2045,7 +2190,7 @@ def create_placeholder_image(prompt, round_num):
 # Track pending image generations
 pending_image_generations = {}  # session_id -> list of pending requests
 
-DEFAULT_POINT_SPLIT = (34, 33, 33)
+DEFAULT_POINT_SPLIT = (4, 3, 3)  # must sum to 10
 
 
 def _next_synthetic_ballot_id():
@@ -2103,7 +2248,7 @@ def advance_to_next_prompting_round_after_selection():
             'round_end_time': game_state.get('round_end_time'),
             'players': [{
                 'name': x.get('display_name', x['name']),
-                'team': x['team'],
+                'condition': x['condition'],
                 'is_connected': x.get('socket_id') is not None,
                 'session_id': x['session_id'],
                 'prompts_submitted': len(x['images'].get(cr, [])),
@@ -2127,15 +2272,9 @@ def start_post_round_three_voting_buffer():
     def kickoff():
         time.sleep(5.0)
         if game_state.get('status') == 'voting_prep':
-            begin_allocation_voting_round(1)
+            start_allocation_voting_phase()
 
     socketio.start_background_task(kickoff)
-
-
-def _finalize_voting_round_db():
-    vid = game_state.get('allocation_voting_round_db_id')
-    if vid:
-        db.end_voting_round_row(vid)
 
 
 def _heuristic_snapshot_from_selected(player, prompt_round=3):
@@ -2143,202 +2282,280 @@ def _heuristic_snapshot_from_selected(player, prompt_round=3):
     imgs = player.get('images', {}).get(prompt_round, [])
     prompt_index = sel.get('prompt_index') or 1
     prompt_text = sel.get('prompt') or ''
+    elapsed = int(sel.get('prompt_sent_elapsed_seconds') or 0)
     return heur_mod.snapshot_for_image_entry(
         prompt_index=prompt_index,
         prompt_text=prompt_text,
         images_before_and_including=imgs,
+        prompt_elapsed_seconds=elapsed,
     )
 
 
-def begin_allocation_voting_round(round_index: int):
-    """
-    round_index 1..9 hardcoded fixtures, 10 = final (balanced peer ballots).
-    """
-    if round_index < 1 or round_index > TOTAL_VOTING_ROUNDS:
+def _maybe_finalize_voting_round_row(round_index: int) -> None:
+    """Close DB voting_round when every active player has submitted that round."""
+    vid = game_state.get('allocation_round_db_ids', {}).get(round_index)
+    if not vid:
         return
-    _finalize_voting_round_db()
-    game_state['allocation_round_index'] = round_index
+    expected = set(game_state.get('voting_active_players') or [])
+    done = game_state.setdefault('allocation_round_submitters', {}).setdefault(round_index, set())
+    if expected and expected <= done:
+        db.end_voting_round_row(vid)
+
+
+def _all_players_finished_allocation() -> bool:
+    expected = set(game_state.get('voting_active_players') or [])
+    if not expected:
+        return False
+    for sid in expected:
+        if players.get(sid, {}).get('allocation_player_round', 0) <= TOTAL_VOTING_ROUNDS:
+            return False
+    return True
+
+
+def start_allocation_voting_phase() -> None:
+    """Each non-admin starts at allocation round 1 and advances independently after each submit."""
     game_state['status'] = 'allocation_voting'
-    game_state['voting_start_time'] = time.time()
-    game_state['allocation_duration'] = 120
-    game_state['allocation_submitted'] = set()
+    game_state['allocation_session_started_at'] = time.time()
+    game_state['allocation_experiment_finalized'] = False
+    game_state['allocation_duration'] = 86400.0
+    game_state['allocation_round_db_ids'] = {}
+    game_state['allocation_round_submitters'] = {}
+    game_state['allocation_points_recorded'] = set()
     game_state['allocation_ballot_map'] = {}
     game_state['allocation_slot_owners'] = {}
-    game_state['allocation_emit_cache'] = {}
     non_admin = [p for p in players.values() if not p['is_admin']]
     game_state['voting_active_players'] = [p['session_id'] for p in non_admin if p.get('socket_id')]
-    gid = game_state.get('game_id')
+    owners = [p['session_id'] for p in non_admin if p.get('selected_images', {}).get(3)]
+    plan: dict = {}
+    try:
+        plan = assign_final_ballots(
+            list(game_state['voting_active_players']), owners, seed=int(time.time()) % 100000
+        )
+    except Exception as e:
+        print(f"[ALLOC] Final ballot plan precompute failed: {e}")
+    game_state['final_allocation_plan'] = plan
 
+    for p in non_admin:
+        if not p.get('socket_id'):
+            continue
+        p['allocation_player_round'] = 1
+        emit_allocation_round_for_player(p['session_id'], 1)
+
+    if admin_session_id in players and players[admin_session_id].get('socket_id'):
+        socketio.emit(
+            'admin_allocation_started',
+            {'allocation_async': True, 'total': TOTAL_VOTING_ROUNDS},
+            room=players[admin_session_id]['socket_id'],
+        )
+
+
+def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
+    """Build ballot + options for one player for one round and emit allocation_vote_started."""
+    if round_index < 1 or round_index > TOTAL_VOTING_ROUNDS:
+        return
+    p = players.get(voter_sid)
+    if not p or p.get('is_admin') or not p.get('socket_id'):
+        return
+    gid = game_state.get('game_id')
     is_final = round_index == TOTAL_VOTING_ROUNDS
+
     if is_final:
         kind = 'final'
         fixture_key = None
         target_url = game_state['target_images'][2]['url']
-        owners = [p['session_id'] for p in non_admin if p.get('selected_images', {}).get(3)]
-        try:
-            plan = assign_final_ballots(list(game_state['voting_active_players']), owners, seed=int(time.time()) % 100000)
-        except Exception as e:
-            print(f"[ALLOC] Final ballot assignment failed: {e}")
-            socketio.emit('error', {'message': 'Not enough submissions for final voting.'})
+        plan = game_state.get('final_allocation_plan') or {}
+        triple = plan.get(voter_sid) or []
+        if len(triple) < 3:
+            socketio.emit(
+                'error',
+                {'message': 'Not enough submissions for final voting.'},
+                room=p['socket_id'],
+            )
             return
     else:
         kind = 'hardcoded'
         fix = FIXTURE_ROUNDS[round_index - 1]
         fixture_key = fix['fixture_set_key']
         target_url = fix['target_image_url']
-        plan = None
 
-    vrid = None
-    if db.is_configured() and gid:
+    vrid = game_state.setdefault('allocation_round_db_ids', {}).get(round_index)
+    if vrid is None and db.is_configured() and gid:
         vrid = db.create_voting_round_row(
             game_id=gid,
             voting_round_index=round_index,
             kind=kind,
-            fixture_set_key=fixture_key,
+            fixture_set_key=fixture_key if not is_final else None,
             target_image_url=target_url,
         )
-    game_state['allocation_voting_round_db_id'] = vrid
+        if vrid:
+            game_state['allocation_round_db_ids'][round_index] = vrid
 
-    for p in non_admin:
-        voter = p['session_id']
-        socket_id = p.get('socket_id')
-        if not socket_id:
-            continue
-        opts = []
-        slot_owners = []
-        if not is_final:
-            fix = FIXTURE_ROUNDS[round_index - 1]
-            for i, c in enumerate(fix['candidates'], start=1):
-                opts.append({
-                    'slot_index': i,
-                    'source': 'fixture',
-                    'fixture_image_id': c['fixture_image_id'],
-                    'image_url': c['image_url'],
-                    'owner_player_id': None,
-                    'prompt_id': None,
-                    'heuristic_snapshot': c.get('heuristics'),
-                })
-                slot_owners.append(None)
-        else:
-            triple = plan.get(voter) or []
-            for i, owner_sid in enumerate(triple, start=1):
-                op = players.get(owner_sid)
-                sel = op.get('selected_images', {}).get(3, {}) if op else {}
-                url = sel.get('image_url') or ''
-                pid = sel.get('prompt_id')
-                if not url and pid and db.is_configured():
-                    try:
-                        r = db.supabase.table('prompts').select('image_url').eq('prompt_id', pid).execute()
-                        if r.data and r.data[0].get('image_url'):
-                            url = r.data[0]['image_url']
-                    except Exception as ex:
-                        print(f"[ALLOC] Could not load image_url for prompt {pid}: {ex}")
-                hs = _heuristic_snapshot_from_selected(op, 3) if op else {}
-                opts.append({
-                    'slot_index': i,
-                    'source': 'player_submission',
-                    'fixture_image_id': None,
-                    'image_url': url,
-                    'owner_player_id': owner_sid,
-                    'prompt_id': pid,
-                    'heuristic_snapshot': hs,
-                })
-                slot_owners.append(owner_sid)
-
-        ballot_id = None
-        if db.is_configured() and gid and vrid:
-            ballot_id = db.create_ballot_with_options(gid, vrid, voter, opts)
-        if ballot_id is None:
-            ballot_id = _next_synthetic_ballot_id()
-        game_state['allocation_ballot_map'][voter] = ballot_id
-        game_state['allocation_slot_owners'][voter] = slot_owners
-
-        ui_opts = []
-        for o in opts:
-            show_h = heur_mod.show_voting_heuristics(p.get('team'))
-            ui_opts.append({
-                'image_url': o['image_url'],
-                'heuristic_display': heur_mod.format_snapshot_for_ui(o['heuristic_snapshot'] or {}) if show_h else [],
+    key = (voter_sid, round_index)
+    opts = []
+    slot_owners = []
+    if not is_final:
+        fix = FIXTURE_ROUNDS[round_index - 1]
+        for i, c in enumerate(fix['candidates'], start=1):
+            opts.append({
+                'slot_index': i,
+                'source': 'fixture',
+                'fixture_image_id': c['fixture_image_id'],
+                'image_url': c['image_url'],
+                'owner_player_id': None,
+                'prompt_id': None,
+                'heuristic_snapshot': c.get('heuristics'),
             })
+            slot_owners.append(None)
+    else:
+        plan = game_state.get('final_allocation_plan') or {}
+        triple = plan.get(voter_sid) or []
+        for i, owner_sid in enumerate(triple, start=1):
+            op = players.get(owner_sid)
+            sel = op.get('selected_images', {}).get(3, {}) if op else {}
+            url = sel.get('image_url') or ''
+            pid = sel.get('prompt_id')
+            if not url and pid and db.is_configured():
+                try:
+                    r = db.supabase.table('prompts').select('image_url').eq('prompt_id', pid).execute()
+                    if r.data and r.data[0].get('image_url'):
+                        url = r.data[0]['image_url']
+                except Exception as ex:
+                    print(f"[ALLOC] Could not load image_url for prompt {pid}: {ex}")
+            hs = _heuristic_snapshot_from_selected(op, 3) if op else {}
+            opts.append({
+                'slot_index': i,
+                'source': 'player_submission',
+                'fixture_image_id': None,
+                'image_url': url,
+                'owner_player_id': owner_sid,
+                'prompt_id': pid,
+                'heuristic_snapshot': hs,
+            })
+            slot_owners.append(owner_sid)
 
-        _av_payload = {
-            'voting_round_index': round_index,
-            'total_voting_rounds': TOTAL_VOTING_ROUNDS,
-            'target_image_url': target_url,
-            'duration': game_state['allocation_duration'],
-            'start_time': game_state['voting_start_time'],
-            'options': ui_opts,
-            'show_voting_heuristics': heur_mod.show_voting_heuristics(p.get('team')),
-        }
-        game_state['allocation_emit_cache'][voter] = dict(_av_payload)
-        socketio.emit('allocation_vote_started', _av_payload, room=socket_id)
+    ballot_id = None
+    if db.is_configured() and gid and vrid:
+        ballot_id = db.create_ballot_with_options(gid, vrid, voter_sid, opts)
+    if ballot_id is None:
+        ballot_id = _next_synthetic_ballot_id()
+    game_state['allocation_ballot_map'][key] = ballot_id
+    game_state['allocation_slot_owners'][key] = slot_owners
 
-    if admin_session_id in players and players[admin_session_id].get('socket_id'):
-        socketio.emit('admin_allocation_started', {
-            'allocation_round': round_index,
-            'total': TOTAL_VOTING_ROUNDS,
-        }, room=players[admin_session_id]['socket_id'])
+    show_h = heur_mod.show_voting_heuristics(p.get('condition'))
+    ui_opts = []
+    for o in opts:
+        ui_opts.append({
+            'image_url': o['image_url'],
+            'heuristic_display': heur_mod.format_snapshot_for_ui(o['heuristic_snapshot'] or {}) if show_h else [],
+        })
+
+    p['allocation_player_round'] = round_index
+    p['allocation_round_t0'] = time.time()
+
+    _av_payload = {
+        'voting_round_index': round_index,
+        'total_voting_rounds': TOTAL_VOTING_ROUNDS,
+        'target_image_url': target_url,
+        'options': ui_opts,
+        'show_voting_heuristics': show_h,
+    }
+    p['allocation_last_payload'] = dict(_av_payload)
+    socketio.emit('allocation_vote_started', _av_payload, room=p['socket_id'])
 
 
-def _apply_missing_allocations_default():
-    """Assign DEFAULT_POINT_SPLIT to players who have not submitted (admin or timeout)."""
-    for sid in game_state.get('voting_active_players', []):
-        if sid in game_state.get('allocation_submitted', set()):
-            continue
+def _apply_missing_allocations_default() -> None:
+    """Admin / day-timeout: default-split every remaining round for each player until all finish."""
+    for sid in list(game_state.get('voting_active_players', [])):
         if sid not in players:
             continue
-        _record_point_allocation(sid, list(DEFAULT_POINT_SPLIT))
+        pl = players[sid]
+        while pl.get('allocation_player_round', 99) <= TOTAL_VOTING_ROUNDS:
+            r = pl['allocation_player_round']
+            if (sid, r) in game_state.get('allocation_points_recorded', set()):
+                pl['allocation_player_round'] = r + 1
+                continue
+            _record_point_allocation(sid, list(DEFAULT_POINT_SPLIT), r)
+            _after_allocation_submit_emit(sid, r)
+    if _all_players_finished_allocation():
+        finish_experiment_final_ranking()
 
 
-def _record_point_allocation(voter_sid: str, triple: list):
-    """Persist allocation and update incentive totals on final round."""
-    if len(triple) != 3 or sum(triple) != 100:
+def _record_point_allocation(voter_sid: str, triple: list, round_index: int) -> None:
+    """Persist one round's allocation; idempotent per (voter, round)."""
+    key = (voter_sid, round_index)
+    if key in game_state.setdefault('allocation_points_recorded', set()):
         return
-    if voter_sid in game_state.get('allocation_submitted', set()):
+    if len(triple) != 3 or sum(triple) != 10:
         return
-    ballot_id = game_state.get('allocation_ballot_map', {}).get(voter_sid)
-    vrid = game_state.get('allocation_voting_round_db_id')
+    pl = players.get(voter_sid)
+    if not pl or pl.get('allocation_player_round') != round_index:
+        print(f"[ALLOC] skip save voter={voter_sid[:8]}... round mismatch want {round_index} have {pl and pl.get('allocation_player_round')}")
+        return
+    ballot_id = game_state.get('allocation_ballot_map', {}).get(key)
+    vrid = game_state.get('allocation_round_db_ids', {}).get(round_index)
     gid = game_state.get('game_id')
     if ballot_id and db.is_configured() and gid and vrid:
+        now = time.time()
+        sess0 = game_state.get('allocation_session_started_at')
+        round0 = pl.get('allocation_round_t0')
+        sec_sess = (now - sess0) if sess0 else None
+        sec_round = (now - round0) if round0 else None
         db.save_point_allocation(
             ballot_id, gid, vrid, voter_sid,
             int(triple[0]), int(triple[1]), int(triple[2]),
+            seconds_since_session_start=sec_sess,
+            seconds_since_round_start=sec_round,
         )
-    owners = game_state.get('allocation_slot_owners', {}).get(voter_sid) or []
-    if game_state.get('allocation_round_index') == TOTAL_VOTING_ROUNDS:
+        ss = f"{sec_sess:.2f}s" if sec_sess is not None else "n/a"
+        sr = f"{sec_round:.2f}s" if sec_round is not None else "n/a"
+        print(
+            f"[ALLOC] points voter={voter_sid[:8]}... round={round_index} session_elapsed={ss} "
+            f"round_elapsed={sr} pts={triple[0]}/{triple[1]}/{triple[2]}"
+        )
+    owners = game_state.get('allocation_slot_owners', {}).get(key) or []
+    if round_index == TOTAL_VOTING_ROUNDS:
         for pts, own in zip(triple, owners):
             if own and own in players:
                 players[own]['incentive_points'] = players[own].get('incentive_points', 0) + int(pts)
-    game_state['allocation_submitted'].add(voter_sid)
-    p = players.get(voter_sid)
-    if p and p.get('socket_id'):
-        socketio.emit('allocation_saved', {'success': True}, room=p['socket_id'])
+    game_state['allocation_points_recorded'].add(key)
+    game_state.setdefault('allocation_round_submitters', {}).setdefault(round_index, set()).add(voter_sid)
+    _maybe_finalize_voting_round_row(round_index)
 
 
-def try_complete_allocation_round():
-    """If all voters submitted or time expired, advance to next voting round or end game."""
-    if game_state['status'] != 'allocation_voting':
+def _after_allocation_submit_emit(voter_sid: str, completed_round: int) -> None:
+    """Emit saved ack, then next round UI or mark session complete and maybe end experiment."""
+    pl = players.get(voter_sid)
+    if not pl:
         return
-    elapsed = time.time() - game_state.get('voting_start_time', time.time())
-    dur = game_state.get('allocation_duration', 120)
-    expected = set(game_state.get('voting_active_players', []))
-    done = game_state.get('allocation_submitted', set())
-    if elapsed >= dur:
-        _apply_missing_allocations_default()
-        done = game_state.get('allocation_submitted', set())
-    if not expected:
-        return
-    if expected.issubset(done):
-        ri = game_state['allocation_round_index']
-        _finalize_voting_round_db()
-        if ri < TOTAL_VOTING_ROUNDS:
-            begin_allocation_voting_round(ri + 1)
-        else:
+    sock = pl.get('socket_id')
+    if completed_round < TOTAL_VOTING_ROUNDS:
+        if sock:
+            socketio.emit('allocation_saved', {'success': True, 'completed_round': completed_round}, room=sock)
+        emit_allocation_round_for_player(voter_sid, completed_round + 1)
+    else:
+        pl['allocation_player_round'] = TOTAL_VOTING_ROUNDS + 1
+        if sock:
+            socketio.emit(
+                'allocation_saved',
+                {
+                    'success': True,
+                    'completed_round': completed_round,
+                    'session_complete': True,
+                    'waiting_for_others': not _all_players_finished_allocation(),
+                },
+                room=sock,
+            )
+        if _all_players_finished_allocation():
             finish_experiment_final_ranking()
 
 
 def finish_experiment_final_ranking():
     """Rank by incentive_points only; random tie-break; no scores shown to players."""
+    if game_state.get('allocation_experiment_finalized'):
+        return
+    if game_state.get('status') != 'allocation_voting':
+        return
+    game_state['allocation_experiment_finalized'] = True
     non_admin = [p for p in players.values() if not p['is_admin']]
     ranked = list(non_admin)
     rng = random.Random(int(time.time() * 1000) % (2 ** 32))
@@ -2420,10 +2637,10 @@ def handle_round_timer_check():
             # and advance to voting screen if all are ready or time has elapsed
             check_all_selected()
     elif game_state['status'] == 'allocation_voting':
-        elapsed = time.time() - game_state.get('voting_start_time', time.time())
-        dur = game_state.get('allocation_duration', 120)
+        elapsed = time.time() - game_state.get('allocation_session_started_at', time.time())
+        dur = game_state.get('allocation_duration', 86400.0)
         if elapsed >= (dur - 2) or elapsed >= dur:
-            try_complete_allocation_round()
+            _apply_missing_allocations_default()
 
 def start_transition_to_selection():
     """Show transition screen, then move to selection after 5-10 seconds"""
@@ -2567,7 +2784,8 @@ def start_voting_phase():
                     'round': current_round,
                     'duration': selection_duration,
                     'start_time': selection_start_time,  # Synchronized start time
-                    'default_selected': False  # Always False - default is UI-only until timer expires
+                    'default_selected': False,  # Always False - default is UI-only until timer expires
+                    'image_context_bullets': player_gets_image_context_bullets(p),
                 }, room=socket_id)
     print(f"[VOTING] Emitted voting_started to {player_count} connected players with synchronized start time")
     
@@ -2579,7 +2797,7 @@ def start_voting_phase():
             'voting_duration': game_state['voting_duration'],  # Include duration for client calculation
             'players': [{
                 'name': p.get('display_name', p['name']),
-                'team': p['team'],
+                'condition': p['condition'],
                 'is_connected': p.get('socket_id') is not None,
                 'has_selected': current_round in p['selected_images'] and p.get('has_confirmed_selection', False),
                 'prompts_submitted': len(p['images'].get(current_round, [])),
@@ -2588,6 +2806,44 @@ def start_voting_phase():
         }, room=players[admin_session_id]['socket_id'])
 
     print(f"Voting phase started for round {current_round}")
+
+
+def _persist_image_selection_row(player, current_round: int, selected_img: dict) -> None:
+    """Write image_selections with heuristic snapshot and selection-vs-latest offset."""
+    if not db.is_configured() or not game_state.get('game_id') or not game_state.get('round_id'):
+        return
+    prompt_id = selected_img.get('prompt_id')
+    if not prompt_id:
+        return
+    imgs = player['images'].get(current_round, [])
+    pi = selected_img.get('prompt_index', 1)
+    elapsed = int(selected_img.get('prompt_sent_elapsed_seconds') or 0)
+    sel_snap = heur_mod.snapshot_for_image_entry(
+        prompt_index=pi,
+        prompt_text=selected_img.get('prompt', ''),
+        images_before_and_including=imgs,
+        prompt_elapsed_seconds=elapsed,
+    )
+    cum = heur_mod.cumulative_word_count_for_round(imgs, pi)
+    idxs = [
+        im.get('prompt_index')
+        for im in imgs
+        if not im.get('error_type') and im.get('prompt_id')
+    ]
+    max_idx = max(idxs) if idxs else pi
+    steps_back = (max_idx - pi) if max_idx is not None and pi is not None else None
+    db.save_image_selection(
+        player_id=player['session_id'],
+        round_id=game_state['round_id'],
+        game_id=game_state['game_id'],
+        prompt_id=prompt_id,
+        prompt_index_at_selection=pi,
+        cumulative_word_count=cum,
+        max_prompt_index_at_selection=max_idx,
+        selection_steps_back_from_latest=steps_back,
+        heuristic_snapshot=sel_snap,
+    )
+
 
 @socketio.on('select_image')
 def handle_select_image(data):
@@ -2638,24 +2894,8 @@ def handle_select_image(data):
     player['selected_images'][current_round] = selected_image
     player['has_confirmed_selection'][current_round] = True  # Mark as confirmed
     
-    # Save image selection to database
+    _persist_image_selection_row(player, current_round, selected_image)
     if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-        imgs = player['images'].get(current_round, [])
-        sel_snap = heur_mod.snapshot_for_image_entry(
-            prompt_index=selected_image.get('prompt_index', 1),
-            prompt_text=selected_image.get('prompt', ''),
-            images_before_and_including=imgs,
-        )
-        db.save_image_selection(
-            player_id=session_id,
-            round_id=game_state['round_id'],
-            game_id=game_state['game_id'],
-            prompt_id=final_prompt_id,
-            prompt_index_at_selection=selected_image.get('prompt_index'),
-            cumulative_word_count=sel_snap.get(heur_mod.HEURISTIC_TOTAL_WORD_COUNT.id),
-            perplexity_normalized_at_selection=sel_snap.get(heur_mod.HEURISTIC_PROMPT_COMPLEXITY.id),
-            heuristic_snapshot=sel_snap,
-        )
         print(f"✅ Saved image selection for player {player.get('display_name', player['name'])} in round {current_round}, prompt_id={final_prompt_id}")
     else:
         print(f"⚠️ WARNING: Cannot save image selection - database not configured or missing game_id/round_id")
@@ -2673,6 +2913,48 @@ def handle_select_image(data):
 
     # Check if all players have selected
     check_all_selected()
+
+
+def force_finish_image_selection_phase():
+    """
+    Admin / console: leave the image-selection screen and follow the normal experiment path:
+    rounds 1–2 → next 5-minute prompting round; round 3 → post-round-3 buffer then point-allocation voting.
+    Does not use legacy per-round `vote_on_images` (that reused #voting-screen and broke allocation UI).
+    """
+    if game_state['status'] != 'voting':
+        return False
+    current_round = game_state['current_round']
+    non_admin_players = [p for p in players.values() if not p.get('is_admin')]
+    active_players = [p for p in non_admin_players if p.get('socket_id') is not None]
+
+    for player in active_players:
+        if current_round not in player.get('selected_images', {}) and player.get('images', {}).get(current_round):
+            valid_images = [
+                img for img in player['images'][current_round]
+                if not img.get('error_type') and img.get('prompt_id') is not None
+            ]
+            if valid_images:
+                last_valid_image = valid_images[-1]
+                player['selected_images'][current_round] = last_valid_image
+                player.setdefault('has_confirmed_selection', {1: False, 2: False, 3: False})
+                player['has_confirmed_selection'][current_round] = True
+                if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+                    _persist_image_selection_row(player, current_round, last_valid_image)
+        elif current_round in player.get('selected_images', {}):
+            player.setdefault('has_confirmed_selection', {1: False, 2: False, 3: False})
+            if not player['has_confirmed_selection'].get(current_round):
+                player['has_confirmed_selection'][current_round] = True
+                if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+                    _persist_image_selection_row(player, current_round, player['selected_images'][current_round])
+
+    if current_round < 3:
+        print(f"[ADMIN] Forcing selection complete — advancing to prompting round {current_round + 1}")
+        advance_to_next_prompting_round_after_selection()
+    else:
+        print('[ADMIN] Forcing selection complete — starting post-round-3 allocation prep')
+        start_post_round_three_voting_buffer()
+    return True
+
 
 def check_all_selected():
     """Check if all players have selected their images, and advance to voting if so"""
@@ -2704,12 +2986,7 @@ def check_all_selected():
                     # Save to database
                     if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
                         prompt_id = last_valid_image.get('prompt_id')
-                        db.save_image_selection(
-                            player_id=player['session_id'],
-                            round_id=game_state['round_id'],
-                            game_id=game_state['game_id'],
-                            prompt_id=prompt_id
-                        )
+                        _persist_image_selection_row(player, current_round, last_valid_image)
                         print(f"[SELECTION] Auto-selected valid image (prompt_id={prompt_id}) for player {player['name']}")
                     else:
                         print(f"[SELECTION] Auto-selected valid image for player {player['name']} (database save skipped - not configured)")
@@ -2784,12 +3061,7 @@ def start_voting_on_images():
                     # Save to database
                     if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
                         prompt_id = last_valid_image.get('prompt_id')
-                        db.save_image_selection(
-                            player_id=player['session_id'],
-                            round_id=game_state['round_id'],
-                            game_id=game_state['game_id'],
-                            prompt_id=prompt_id
-                        )
+                        _persist_image_selection_row(player, current_round, last_valid_image)
                         print(f"[VOTING] Auto-selected valid image (prompt_id={prompt_id}) for player {player['name']} before voting")
                         auto_selected_count += 1
                     else:
@@ -2866,7 +3138,8 @@ def start_voting_on_images():
                         'my_session_id': target_session_id,
                         'target_image': {
                             'url': target_image.get('url', '')
-                        }
+                        },
+                        'image_context_bullets': player_gets_image_context_bullets(player),
                     }, room=socket_id)
 
         print("Players now voting on images")
@@ -2889,16 +3162,30 @@ def handle_submit_point_allocation(data):
     except (TypeError, ValueError):
         emit('error', {'message': 'Invalid points'})
         return
-    if a + b + c != 100 or min(a, b, c) < 0 or max(a, b, c) > 100:
-        emit('error', {'message': 'Points must be integers from 0 to 100 summing to 100'})
+    if a + b + c != 10 or min(a, b, c) < 0 or max(a, b, c) > 10:
+        emit('error', {'message': 'Points must be integers from 0 to 10 summing to 10'})
         return
-    _record_point_allocation(session_id, [a, b, c])
-    try_complete_allocation_round()
+    voter = players[session_id]
+    ri = voter.get('allocation_player_round')
+    if ri is None or ri < 1 or ri > TOTAL_VOTING_ROUNDS:
+        emit('error', {'message': 'Invalid allocation state'})
+        return
+    cr = pts.get('voting_round_index')
+    if cr is not None:
+        try:
+            if int(cr) != ri:
+                emit('error', {'message': 'Round mismatch; refresh the voting screen.'})
+                return
+        except (TypeError, ValueError):
+            emit('error', {'message': 'Invalid voting round.'})
+            return
+    _record_point_allocation(session_id, [a, b, c], ri)
+    _after_allocation_submit_emit(session_id, ri)
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         socketio.emit('player_allocation_submitted', {
             'session_id': session_id,
             'player_name': players[session_id].get('display_name', players[session_id]['name']),
-            'round': game_state['allocation_round_index'],
+            'round': ri,
         }, room=players[admin_session_id]['socket_id'])
 
 
@@ -3068,7 +3355,7 @@ def show_round_results():
             'results': results,
             'players': [{
                 'name': p.get('display_name', p['name']),
-                'team': p['team'],
+                'condition': p['condition'],
                 'is_connected': p.get('socket_id') is not None,
                 'session_id': p['session_id'],
                 'score': p['score'],
@@ -3142,7 +3429,8 @@ def handle_next_round():
                         'round': game_state['current_round'],
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
-                        'character': character_data
+                        'character': character_data,
+                        'image_context_bullets': player_gets_image_context_bullets(p),
                     }, room=socket_id)
         
         # Send admin game started event with player status
@@ -3156,7 +3444,7 @@ def handle_next_round():
                 'round_end_time': game_state.get('round_end_time'),  # Include end time for client calculation
                 'players': [{
                     'name': p.get('display_name', p['name']),
-                    'team': p['team'],
+                    'condition': p['condition'],
                     'is_connected': p.get('socket_id') is not None,
                     'session_id': p['session_id'],
                     'prompts_submitted': len(p['images'].get(current_round_num, []))
@@ -3165,7 +3453,13 @@ def handle_next_round():
 
         print(f"Round {game_state['current_round']} started")
     else:
-        end_game()
+        # Prompting ends after round 3; selection and allocation voting advance automatically.
+        msg = (
+            'Round 3 is the last prompting round. Do not use Next round — the game continues '
+            'with image selection, then point voting. Use admin controls for allocation rounds if needed.'
+        )
+        emit('error', {'message': msg})
+        print(f'[ADMIN] next_round ignored after prompting: {msg}')
 
 def end_game():
     game_state['status'] = 'game_over'
@@ -3182,7 +3476,7 @@ def end_game():
                 'player_name': player.get('display_name', player['name']),
                 'total_score': player['score'],
                 'round_scores': player['round_scores'],
-                'team': player['team'],
+                'condition': player['condition'],
                 'character': player['character'],
                 'prompt_count': player['prompt_count']
             })
@@ -3204,7 +3498,7 @@ def end_game():
             'results': final_results,
             'players': [{
                 'name': p.get('display_name', p['name']),
-                'team': p['team'],
+                'condition': p['condition'],
                 'is_connected': p.get('socket_id') is not None,
                 'session_id': p['session_id'],
                 'score': p['score'],
@@ -3218,10 +3512,11 @@ def end_game():
     # This allows admin to clear players after the game is done
     # Players will still see the leaderboard on their screen, but server state is reset
     game_state['status'] = 'lobby'
+    game_state['onboarding_phase'] = 'prompting'
 
 @socketio.on('skip_voting')
 def handle_skip_voting():
-    """Admin-only: Skip voting phase and go to results"""
+    """Admin-only: Context-dependent skip (selection → next prompting or R3 allocation prep; legacy image voting → results; allocation → force advance)."""
     session_id = session.get('session_id')
     
     # Check if player is admin
@@ -3231,35 +3526,13 @@ def handle_skip_voting():
     
     if game_state['status'] == 'allocation_voting':
         _apply_missing_allocations_default()
-        try_complete_allocation_round()
         return
 
     # Only allow skipping if we're in voting phase
     if game_state['status'] in ['voting', 'voting_images']:
         if game_state['status'] == 'voting':
-            # Still in selection phase - auto-select for any players who haven't selected, then move to image voting
-            # start_voting_on_images() will handle auto-selection, but we ensure it's done
-            current_round = game_state['current_round']
-            non_admin_players = [p for p in players.values() if not p.get('is_admin')]
-            active_players = [p for p in non_admin_players if p.get('socket_id') is not None]
-            
-            for player in active_players:
-                if current_round not in player['selected_images'] and player['images'].get(current_round):
-                    valid_images = [img for img in player['images'][current_round] 
-                                  if not img.get('error_type') and img.get('prompt_id') is not None]
-                    if valid_images:
-                        last_valid_image = valid_images[-1]
-                        player['selected_images'][current_round] = last_valid_image
-                        player['has_confirmed_selection'][current_round] = True
-                        if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-                            db.save_image_selection(
-                                player_id=player['session_id'],
-                                round_id=game_state['round_id'],
-                                game_id=game_state['game_id'],
-                                prompt_id=last_valid_image.get('prompt_id')
-                            )
-            
-            start_voting_on_images()
+            # Image selection: same outcome as everyone finishing — next prompting (R1–2) or allocation prep (R3).
+            force_finish_image_selection_phase()
         else:
             # In image voting phase - skip to results
             show_round_results()
@@ -3313,7 +3586,7 @@ def handle_admin_get_status():
 
             player_status.append({
                 'name': p.get('display_name', p['name']),
-                'team': p['team'],
+                'condition': p['condition'],
                 'is_connected': p.get('socket_id') is not None,
                 'prompts_submitted': prompts_submitted,
                 'has_selected': has_selected,
@@ -3332,11 +3605,19 @@ def handle_admin_get_status():
 
 @socketio.on('admin_end_round')
 def handle_admin_end_round():
-    """Admin-only: End current round early and move to transition/selection"""
+    """Admin-only: End playing round early, or during onboarding start practice voting."""
     session_id = session.get('session_id')
     
     if session_id != admin_session_id:
         emit('error', {'message': 'Only admin can end round early'})
+        return
+
+    if game_state['status'] == 'onboarding':
+        if game_state.get('onboarding_phase', 'prompting') != 'prompting':
+            emit('error', {'message': 'Practice voting is already in progress.'})
+            return
+        print('[ONBOARDING] Admin ended practice prompting → practice voting')
+        broadcast_onboarding_practice_voting()
         return
     
     # Only allow ending round if currently playing
@@ -3347,6 +3628,49 @@ def handle_admin_end_round():
     print(f"[ADMIN] Admin ending round {game_state['current_round']} early")
     # Force transition to selection screen
     start_transition_to_selection()
+
+
+@socketio.on('submit_onboarding_practice_points')
+def handle_submit_onboarding_practice_points(data):
+    """Non-admin: submit exactly 10 points across three onboarding practice slots; persisted per player."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in players:
+        return
+    player = players[session_id]
+    if player.get('is_admin'):
+        emit('error', {'message': 'Gamemaster does not submit practice points.'})
+        return
+    if game_state['status'] != 'onboarding' or game_state.get('onboarding_phase') != 'practice_voting':
+        emit('error', {'message': 'Practice voting is not active.'})
+        return
+    if player.get('onboarding_practice_submitted'):
+        emit('error', {'message': 'You already submitted your practice points.'})
+        return
+    pts = (data or {}).get('points')
+    if not isinstance(pts, list) or len(pts) != 3:
+        emit('error', {'message': 'Send exactly three point values.'})
+        return
+    try:
+        nums = [int(pts[i]) for i in range(3)]
+    except (TypeError, ValueError):
+        emit('error', {'message': 'Points must be whole numbers.'})
+        return
+    for n in nums:
+        if n < 0 or n > 10:
+            emit('error', {'message': 'Each value must be between 0 and 10.'})
+            return
+    if sum(nums) != 10:
+        emit('error', {'message': 'Points must total exactly 10.'})
+        return
+    player['onboarding_practice_points'] = nums
+    player['onboarding_practice_submitted'] = True
+    pname = player.get('display_name', player.get('name', ''))
+    db.save_onboarding_practice_vote(session_id, pname, nums[0], nums[1], nums[2])
+    gid = game_state.get('game_id')
+    if gid and db.is_configured():
+        db.link_onboarding_practice_vote_to_game(session_id, gid)
+    emit('onboarding_practice_points_saved', {'success': True})
+    notify_admin_player_list()
 
 @socketio.on('restart_game')
 def handle_restart_game():
@@ -3373,10 +3697,19 @@ def handle_restart_game():
     
     # Reset game state (game_id will be None, so next start_game will create a new one)
     game_state['status'] = 'lobby'
+    game_state['onboarding_phase'] = 'prompting'
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
     game_state['voting_start_time'] = None
+    game_state['allocation_session_started_at'] = None
+    game_state['allocation_experiment_finalized'] = False
+    game_state['allocation_round_db_ids'] = {}
+    game_state['allocation_round_submitters'] = {}
+    game_state['allocation_points_recorded'] = set()
+    game_state['allocation_ballot_map'] = {}
+    game_state['allocation_slot_owners'] = {}
+    game_state['final_allocation_plan'] = None
     game_state['game_id'] = None  # This ensures a new game_id will be created on next start
     game_state['round_id'] = None
 
@@ -3486,6 +3819,7 @@ def handle_clear_lobby():
     if game_state['status'] == 'onboarding' and len([p for p in players.values() if not p['is_admin']]) == 0:
         game_state['status'] = 'lobby'
         game_state['current_round'] = 0
+        game_state['onboarding_phase'] = 'prompting'
 
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
@@ -3543,6 +3877,7 @@ def handle_remove_player(data):
     if game_state['status'] == 'onboarding' and len([p for p in players.values() if not p['is_admin']]) == 0:
         game_state['status'] = 'lobby'
         game_state['current_round'] = 0
+        game_state['onboarding_phase'] = 'prompting'
     
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
@@ -3566,14 +3901,14 @@ def handle_set_player_team(data):
         return
 
     target_session_id = data.get('session_id')
-    team = data.get('team')
+    team = data.get('condition') or data.get('team')
     
     if not target_session_id or not team:
-        emit('error', {'message': 'Missing session_id or team'})
+        emit('error', {'message': 'Missing session_id or condition'})
         return
     
     if team not in PLAYER_GROUPS:
-        emit('error', {'message': f'Team must be one of: {", ".join(PLAYER_GROUPS)}'})
+        emit('error', {'message': f'Condition must be one of: {", ".join(PLAYER_GROUPS)}'})
         return
     
     # Check if player exists
@@ -3589,7 +3924,7 @@ def handle_set_player_team(data):
         return
     
     # Set team and character
-    player['team'] = team
+    player['condition'] = team
     player['character'] = get_character(team)
     
     # Update database if game has started
@@ -3598,7 +3933,7 @@ def handle_set_player_team(data):
             game_id=game_state['game_id'],
             player_id=target_session_id,
             player_name=player['name'],
-            team=team,
+            condition=team,
             character=player['character']
         )
     
@@ -3626,7 +3961,7 @@ def set_player_team_console(target_session_id: str, team: str):
         return
     
     # Set team and character
-    player['team'] = team
+    player['condition'] = team
     player['character'] = get_character(team)
     
     # Update database if game has started
@@ -3635,7 +3970,7 @@ def set_player_team_console(target_session_id: str, team: str):
             game_id=game_state['game_id'],
             player_id=target_session_id,
             player_name=player['name'],
-            team=team,
+            condition=team,
             character=player['character']
         )
     
@@ -3660,33 +3995,10 @@ def set_player_team_console(target_session_id: str, team: str):
 #   curl -X POST https://your-app.railway.app/admin/console/next-round
 #   curl -X POST https://your-app.railway.app/admin/console/restart-game
 def skip_selection():
-    """Console command: Skip selection screen and go to voting screen"""
+    """Console command: Skip image selection — same as admin Skip Voting during selection (next prompting or R3 allocation prep)."""
     if game_state['status'] == 'voting':
-        print("[CONSOLE] Skipping selection screen, advancing to voting on images")
-        # Auto-select for any players who haven't selected before advancing
-        # start_voting_on_images() will handle this, but we ensure it's done
-        current_round = game_state['current_round']
-        non_admin_players = [p for p in players.values() if not p.get('is_admin')]
-        active_players = [p for p in non_admin_players if p.get('socket_id') is not None]
-        
-        for player in active_players:
-            if current_round not in player['selected_images'] and player['images'].get(current_round):
-                valid_images = [img for img in player['images'][current_round] 
-                              if not img.get('error_type') and img.get('prompt_id') is not None]
-                if valid_images:
-                    last_valid_image = valid_images[-1]
-                    player['selected_images'][current_round] = last_valid_image
-                    player['has_confirmed_selection'][current_round] = True
-                    if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-                        db.save_image_selection(
-                            player_id=player['session_id'],
-                            round_id=game_state['round_id'],
-                            game_id=game_state['game_id'],
-                            prompt_id=last_valid_image.get('prompt_id')
-                        )
-        
-        start_voting_on_images()
-        return True
+        print("[CONSOLE] Skipping selection screen — advancing via force_finish_image_selection_phase")
+        return force_finish_image_selection_phase()
     else:
         print(f"[CONSOLE] Cannot skip selection - current status is {game_state['status']}, expected 'voting'")
         return False
@@ -3751,7 +4063,8 @@ def next_round_console():
                             'round': game_state['current_round'],
                             'target': game_state['current_target'],
                             'end_time': game_state['round_end_time'],
-                            'character': character_data
+                            'character': character_data,
+                            'image_context_bullets': player_gets_image_context_bullets(p),
                         }, room=socket_id)
             
             # Send admin game started event
@@ -3763,7 +4076,7 @@ def next_round_console():
                     'time_remaining': time_remaining,
                     'players': [{
                         'name': p.get('display_name', p['name']),
-                        'team': p['team'],
+                        'condition': p['condition'],
                         'is_connected': p.get('socket_id') is not None,
                         'session_id': p['session_id'],
                         'score': p['score'],
@@ -3792,6 +4105,7 @@ def restart_game_console():
     
     # Reset game state
     game_state['status'] = 'lobby'
+    game_state['onboarding_phase'] = 'prompting'
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
@@ -3859,9 +4173,9 @@ def console_set_player_team():
     import json
     data = request.get_json() or {}
     target_session_id = data.get('session_id')
-    team = data.get('team')
+    team = data.get('condition') or data.get('team')
     if not target_session_id or not team:
-        return {'success': False, 'error': 'Missing session_id or team'}, 400
+        return {'success': False, 'error': 'Missing session_id or condition'}, 400
     set_player_team_console(target_session_id, team)
     return {'success': True}
 

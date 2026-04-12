@@ -209,7 +209,48 @@ def flush_pre_survey_pending_to_player(player_id: str, game_id: int) -> None:
         print(f"❌ Error flushing pre_survey_pending: {e}")
 
 
-def create_player(game_id: int, player_id: str, player_name: str, team: Optional[str] = None, character: Optional[str] = None):
+def upsert_experiment_pre_survey(
+    player_id: str,
+    proficiency: str,
+    frequency: str,
+    skills_text: str,
+    game_id: Optional[int] = None,
+) -> bool:
+    """Row in experiment_pre_surveys (one per player per game_id; game_id null until game starts)."""
+    if not is_configured() or not player_id:
+        return False
+    try:
+        now = datetime.utcnow().isoformat()
+        row: Dict[str, Any] = {
+            'player_id': player_id,
+            'proficiency': proficiency,
+            'frequency': frequency,
+            'skills_text': skills_text,
+            'submitted_at': now,
+        }
+        if game_id is not None:
+            row['game_id'] = game_id
+        supabase.table('experiment_pre_surveys').upsert(row, on_conflict='player_id').execute()
+        print(f"✅ experiment_pre_surveys upsert player={player_id[:8]}...")
+        return True
+    except Exception as e:
+        print(f"❌ Error upserting experiment_pre_surveys: {e}")
+        return False
+
+
+def link_pre_survey_response_to_game(player_id: str, game_id: int) -> None:
+    """Set game_id on the player's pre-survey row after the game is created."""
+    if not is_configured() or not game_id or not player_id:
+        return
+    try:
+        supabase.table('experiment_pre_surveys').update({'game_id': game_id}).eq(
+            'player_id', player_id
+        ).execute()
+    except Exception as e:
+        print(f"❌ Error linking experiment_pre_surveys game_id: {e}")
+
+
+def create_player(game_id: int, player_id: str, player_name: str, condition: Optional[str] = None, character: Optional[str] = None):
     """Create or update a player in the database."""
     if not is_configured() or not game_id:
         return
@@ -218,37 +259,83 @@ def create_player(game_id: int, player_id: str, player_name: str, team: Optional
         # Check if player already exists
         existing = supabase.table('players').select('player_id').eq('player_id', player_id).execute()
         
-        study_group = team if team in ('C_NA', 'C_HU', 'T_NA', 'T_HU') else None
         if existing.data:
-            # Update existing player
             row = {
                 'game_id': game_id,
                 'player_name': player_name,
-                'team': team,
+                'condition': condition,
                 'character': character,
             }
-            if study_group is not None:
-                row['study_group'] = study_group
             supabase.table('players').update(row).eq('player_id', player_id).execute()
         else:
-            # Create new player
             ins = {
                 'player_id': player_id,
                 'game_id': game_id,
                 'player_name': player_name,
-                'team': team,
+                'condition': condition,
                 'character': character,
                 'joined_at': datetime.utcnow().isoformat(),
             }
-            if study_group is not None:
-                ins['study_group'] = study_group
             supabase.table('players').insert(ins).execute()
         
         _game_id_cache[player_id] = game_id
         print(f"✅ Created/updated player: {player_id} ({player_name})")
         flush_pre_survey_pending_to_player(player_id, game_id)
+        link_pre_survey_response_to_game(player_id, game_id)
+        link_onboarding_practice_vote_to_game(player_id, game_id)
     except Exception as e:
         print(f"❌ Error creating player: {e}")
+
+
+def save_onboarding_practice_vote(
+    player_id: str,
+    player_name: str,
+    p1: int,
+    p2: int,
+    p3: int,
+) -> bool:
+    """Upsert onboarding practice point distribution for a player (before or after game_id exists)."""
+    if not is_configured() or not player_id:
+        return False
+    try:
+        now = datetime.utcnow().isoformat()
+        existing = (
+            supabase.table('onboarding_practice_votes')
+            .select('game_id')
+            .eq('player_id', player_id)
+            .execute()
+        )
+        game_id_val = None
+        if existing.data:
+            game_id_val = existing.data[0].get('game_id')
+        row = {
+            'player_id': player_id,
+            'player_name': player_name,
+            'points_slot_1': p1,
+            'points_slot_2': p2,
+            'points_slot_3': p3,
+            'submitted_at': now,
+        }
+        if game_id_val is not None:
+            row['game_id'] = game_id_val
+        supabase.table('onboarding_practice_votes').upsert(row, on_conflict='player_id').execute()
+        print(f"✅ Saved onboarding_practice_vote for player {player_id[:8]}...")
+        return True
+    except Exception as e:
+        print(f"❌ Error saving onboarding_practice_vote: {e}")
+        return False
+
+
+def link_onboarding_practice_vote_to_game(player_id: str, game_id: int) -> None:
+    """Attach game_id to an existing onboarding practice vote row when the player joins analytics `players`."""
+    if not is_configured() or not game_id or not player_id:
+        return
+    try:
+        supabase.table('onboarding_practice_votes').update({'game_id': game_id}).eq(
+            'player_id', player_id
+        ).execute()
+    except Exception as e:
+        print(f"❌ Error linking onboarding_practice_vote to game: {e}")
 
 
 def upload_image_to_storage(image_bytes: bytes, file_path: str) -> Optional[str]:
@@ -292,7 +379,7 @@ def save_prompt_sync(game_id: int, round_id: int, player_id: str, prompt_index: 
                      file_size_kb: Optional[float] = None,
                      safety_ratings: Optional[dict] = None,
                      word_count: Optional[int] = None,
-                     perplexity_normalized: Optional[float] = None) -> Optional[int]:
+                     prompt_sent_elapsed_seconds: Optional[int] = None) -> Optional[int]:
     """
     Save a prompt and image to the database (synchronous).
     Returns prompt_id if successful, None otherwise.
@@ -331,8 +418,8 @@ def save_prompt_sync(game_id: int, round_id: int, player_id: str, prompt_index: 
             data['safety_ratings'] = safety_ratings
         if word_count is not None:
             data['word_count'] = word_count
-        if perplexity_normalized is not None:
-            data['perplexity_normalized'] = perplexity_normalized
+        if prompt_sent_elapsed_seconds is not None:
+            data['prompt_sent_elapsed_seconds'] = prompt_sent_elapsed_seconds
         
         result = supabase.table('prompts').insert(data).execute()
         
@@ -366,7 +453,8 @@ def save_image_selection(
     prompt_id: int,
     prompt_index_at_selection: Optional[int] = None,
     cumulative_word_count: Optional[int] = None,
-    perplexity_normalized_at_selection: Optional[float] = None,
+    max_prompt_index_at_selection: Optional[int] = None,
+    selection_steps_back_from_latest: Optional[int] = None,
     heuristic_snapshot: Optional[dict] = None,
 ):
     """Save a player's image selection. Uses upsert to handle duplicate selections gracefully."""
@@ -385,8 +473,10 @@ def save_image_selection(
             row['prompt_index_at_selection'] = prompt_index_at_selection
         if cumulative_word_count is not None:
             row['cumulative_word_count'] = cumulative_word_count
-        if perplexity_normalized_at_selection is not None:
-            row['perplexity_normalized_at_selection'] = perplexity_normalized_at_selection
+        if max_prompt_index_at_selection is not None:
+            row['max_prompt_index_at_selection'] = max_prompt_index_at_selection
+        if selection_steps_back_from_latest is not None:
+            row['selection_steps_back_from_latest'] = selection_steps_back_from_latest
         if heuristic_snapshot is not None:
             row['heuristic_snapshot'] = heuristic_snapshot
         supabase.table('image_selections').upsert(row).execute()
@@ -505,26 +595,45 @@ def save_point_allocation(
     points_slot_1: int,
     points_slot_2: int,
     points_slot_3: int,
+    *,
+    seconds_since_session_start: Optional[float] = None,
+    seconds_since_round_start: Optional[float] = None,
 ) -> bool:
     if not is_configured() or not ballot_id:
         return False
-    if points_slot_1 + points_slot_2 + points_slot_3 != 100:
+    if points_slot_1 + points_slot_2 + points_slot_3 != 10:
         return False
+    row: Dict[str, Any] = {
+        'ballot_id': ballot_id,
+        'game_id': game_id,
+        'voting_round_id': voting_round_id,
+        'voter_player_id': voter_player_id,
+        'points_slot_1': points_slot_1,
+        'points_slot_2': points_slot_2,
+        'points_slot_3': points_slot_3,
+        'submitted_at': datetime.utcnow().isoformat(),
+    }
+    if seconds_since_session_start is not None:
+        row['seconds_since_session_start'] = float(seconds_since_session_start)
+    if seconds_since_round_start is not None:
+        row['seconds_since_round_start'] = float(seconds_since_round_start)
     try:
-        supabase.table('point_allocations').insert({
-            'ballot_id': ballot_id,
-            'game_id': game_id,
-            'voting_round_id': voting_round_id,
-            'voter_player_id': voter_player_id,
-            'points_slot_1': points_slot_1,
-            'points_slot_2': points_slot_2,
-            'points_slot_3': points_slot_3,
-            'submitted_at': datetime.utcnow().isoformat(),
-        }).execute()
+        supabase.table('point_allocations').insert(row).execute()
         print(f"✅ point_allocation ballot={ballot_id} voter={voter_player_id[:8]}... {points_slot_1}/{points_slot_2}/{points_slot_3}")
         return True
     except Exception as e:
         print(f"❌ Error saving point_allocation: {e}")
+        had_timing = 'seconds_since_session_start' in row or 'seconds_since_round_start' in row
+        err = str(e).lower()
+        if had_timing and any(s in err for s in ('column', 'schema', 'unknown', 'could not find', 'pgrst')):
+            try:
+                row.pop('seconds_since_session_start', None)
+                row.pop('seconds_since_round_start', None)
+                supabase.table('point_allocations').insert(row).execute()
+                print(f"✅ point_allocation (no timing columns) ballot={ballot_id} voter={voter_player_id[:8]}...")
+                return True
+            except Exception as e2:
+                print(f"❌ Error saving point_allocation (retry): {e2}")
     return False
 
 
@@ -694,7 +803,7 @@ def get_player_by_name_and_game(player_name: str, game_id: int) -> Optional[Dict
     
     try:
         # Get all players for this game and match case-insensitively
-        result = supabase.table('players').select('player_id, player_name, team, character').eq('game_id', game_id).execute()
+        result = supabase.table('players').select('player_id, player_name, condition, character').eq('game_id', game_id).execute()
         if result.data:
             # Case-insensitive match
             player_name_lower = player_name.lower().strip()

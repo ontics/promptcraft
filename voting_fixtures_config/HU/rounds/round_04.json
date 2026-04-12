@@ -1,0 +1,10 @@
+{
+  "fixture_set_key": "hu_pilot_04",
+  "target_profile": "tree",
+  "target_image": "/static/images/target2.jpg",
+  "candidates": [
+    {"fixture_image_id": "hu04_a", "image": "options/slot_a.svg", "heuristics": {"number_of_prompts": 1, "total_word_count": 14, "time_in_round_seconds": 42}},
+    {"fixture_image_id": "hu04_b", "image": "options/slot_b.svg", "heuristics": {"number_of_prompts": 5, "total_word_count": 81, "time_in_round_seconds": 149}},
+    {"fixture_image_id": "hu04_c", "image": "options/slot_c.svg", "heuristics": {"number_of_prompts": 8, "total_word_count": 119, "time_in_round_seconds": 203}}
+  ]
+}

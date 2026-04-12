@@ -86,7 +86,7 @@
                 <div class="admin-controls-group">
                     <h3>Round Controls</h3>
                     <button id="admin-end-round-btn" class="btn btn-danger">End Round Early</button>
-                    <button id="admin-skip-voting-btn" class="btn btn-warning">Skip Voting / Advance</button>
+                    <button type="button" id="admin-skip-voting-btn" class="btn btn-warning" title="During image selection: go to the next prompting round (or allocation voting after round 3). During legacy image voting: skip to results. During point voting: force-submit and advance.">Skip Voting / Advance</button>
                     <button id="admin-next-round-btn" class="btn btn-success">Next Round</button>
                 </div>
                 <div class="admin-status">
@@ -145,6 +145,9 @@
                             <div class="target-image-container">
                                 <img id="target-image-display" src="" alt="Target Image">
                             </div>
+                            <div class="image-context-bullets gameplay-image-context-bullets" id="game-target-bullets" aria-hidden="true">
+                                <ul class="image-context-bullets-list"></ul>
+                            </div>
                         </div>
 
                         <div class="below-target-section">
@@ -162,6 +165,53 @@
                             <div id="aggregate-heuristics-panel" class="aggregate-heuristics-panel" style="display: none;" aria-hidden="true"></div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Onboarding only: practice point distribution (layout matches allocation voting) -->
+        <div id="onboarding-practice-voting-screen" class="screen">
+            <div class="allocation-voting-wrap onboarding-practice-allocation-wrap">
+                <div class="game-header allocation-game-header">
+                    <div class="header-left">
+                        <h2 id="ob-practice-voting-title">Practice voting</h2>
+                        <p class="player-info allocation-voting-header-spacer" aria-hidden="true">&nbsp;</p>
+                    </div>
+                    <div class="header-right">
+                        <p class="allocation-points-header" id="ob-practice-header-points" aria-live="polite">10 points to allocate</p>
+                    </div>
+                </div>
+                <div class="container allocation-inner">
+                    <p class="allocation-instructions" id="ob-practice-instructions">Distribute 10 points among the following images (practice).</p>
+                    <p class="ob-practice-peers-note" id="ob-practice-peers-note" role="note">These are sample images. Live voting uses the same layout.</p>
+                    <div class="allocation-layout">
+                        <div class="allocation-slots" id="ob-practice-allocation-slots">
+                            <div class="allocation-slot">
+                                <div class="allocation-slot-img-wrap"><img id="ob-practice-opt-img-1" class="allocation-opt-img" src="{{ url_for('static', filename='images/onboarding-practice-option-1.png') }}" alt="Option 1"></div>
+                                <label class="allocation-pts-label" for="ob-practice-pts-1">Points</label>
+                                <input type="number" min="0" max="10" step="1" class="allocation-pts-input" id="ob-practice-pts-1" value="0" inputmode="numeric" aria-label="Points for option 1">
+                            </div>
+                            <div class="allocation-slot">
+                                <div class="allocation-slot-img-wrap"><img id="ob-practice-opt-img-2" class="allocation-opt-img" src="{{ url_for('static', filename='images/onboarding-practice-option-2.png') }}" alt="Option 2"></div>
+                                <label class="allocation-pts-label" for="ob-practice-pts-2">Points</label>
+                                <input type="number" min="0" max="10" step="1" class="allocation-pts-input" id="ob-practice-pts-2" value="0" inputmode="numeric" aria-label="Points for option 2">
+                            </div>
+                            <div class="allocation-slot">
+                                <div class="allocation-slot-img-wrap"><img id="ob-practice-opt-img-3" class="allocation-opt-img" src="{{ url_for('static', filename='images/onboarding-practice-option-3.png') }}" alt="Option 3"></div>
+                                <label class="allocation-pts-label" for="ob-practice-pts-3">Points</label>
+                                <input type="number" min="0" max="10" step="1" class="allocation-pts-input" id="ob-practice-pts-3" value="0" inputmode="numeric" aria-label="Points for option 3">
+                            </div>
+                        </div>
+                        <div class="allocation-target-col">
+                            <h3>Target image</h3>
+                            <div class="target-image-voting">
+                                <img id="ob-practice-target-img" src="" alt="Practice target">
+                            </div>
+                        </div>
+                    </div>
+                    <p id="ob-practice-vote-error" class="lobby-survey-error" style="display: none;" role="alert"></p>
+                    <button type="button" id="ob-practice-submit-btn" class="btn btn-primary" disabled>Submit points</button>
+                    <p id="ob-practice-vote-done" class="ob-practice-done" style="display: none;">Thanks — your practice points are recorded.</p>
                 </div>
             </div>
         </div>
@@ -199,18 +249,17 @@
             </div>
         </div>
 
-        <!-- Voting / point-allocation screen -->
+        <!-- Voting / point-allocation screen (10 rounds after round 3; header matches game screen height) -->
         <div id="voting-screen" class="screen">
             <div class="allocation-voting-wrap">
                 <div class="game-header allocation-game-header">
                     <div class="header-left">
-                        <h2 id="allocation-round-heading">Voting round <span id="allocation-round-num">1</span>/<span id="allocation-round-total">10</span></h2>
-                        <p class="player-info"><span id="allocation-player-display-name"></span></p>
+                        <h2 id="allocation-voting-title">Voting Round <span id="allocation-round-num">1</span>/<span id="allocation-round-total">10</span></h2>
+                        <p class="player-info allocation-voting-header-spacer" aria-hidden="true">&nbsp;</p>
                     </div>
-                    <div class="header-center">
-                        <div class="timer" id="allocation-timer">2:00</div>
+                    <div class="header-right">
+                        <p class="allocation-points-header" id="allocation-points-header" aria-live="polite">10 points to allocate</p>
                     </div>
-                    <div class="header-right"></div>
                 </div>
                 <div class="container allocation-inner">
                     <p class="allocation-instructions" id="allocation-instructions">Distribute points among the following images</p>
@@ -221,8 +270,10 @@
                             <h3>Target image</h3>
                             <div class="target-image-voting">
                                 <img id="voting-target-image" src="" alt="Target Image">
+                                <div class="image-context-bullets gameplay-image-context-bullets" id="voting-target-bullets" aria-hidden="true">
+                                    <ul class="image-context-bullets-list"></ul>
+                                </div>
                             </div>
-                            <p id="allocation-points-status" class="allocation-points-status" aria-live="polite"></p>
                         </div>
                     </div>
 

@@ -5,7 +5,7 @@
 -- prompts: generation + heuristic fields (analytics; similarity optional/offline)
 -- ---------------------------------------------------------------------------
 ALTER TABLE prompts ADD COLUMN IF NOT EXISTS word_count int;
-ALTER TABLE prompts ADD COLUMN IF NOT EXISTS perplexity_normalized real;
+ALTER TABLE prompts ADD COLUMN IF NOT EXISTS prompt_sent_elapsed_seconds int;
 ALTER TABLE prompts ADD COLUMN IF NOT EXISTS similarity_to_target real;
 ALTER TABLE prompts ADD COLUMN IF NOT EXISTS similarity_method text;
 
@@ -14,13 +14,9 @@ ALTER TABLE prompts ADD COLUMN IF NOT EXISTS similarity_method text;
 -- ---------------------------------------------------------------------------
 ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS prompt_index_at_selection int;
 ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS cumulative_word_count int;
-ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS perplexity_normalized_at_selection real;
 ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS heuristic_snapshot jsonb;
-
--- ---------------------------------------------------------------------------
--- players: study condition (mirrors assigned group label in team column)
--- ---------------------------------------------------------------------------
-ALTER TABLE players ADD COLUMN IF NOT EXISTS study_group text;
+ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS max_prompt_index_at_selection int;
+ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS selection_steps_back_from_latest int;
 
 -- ---------------------------------------------------------------------------
 -- Legacy single-vote table: optional archive; new writes go to point_allocations
@@ -76,7 +72,7 @@ CREATE TABLE IF NOT EXISTS ballot_options (
 CREATE INDEX IF NOT EXISTS idx_ballot_options_ballot ON ballot_options(ballot_id);
 
 -- ---------------------------------------------------------------------------
--- point_allocations: integers summing to 100
+-- point_allocations: integers summing to 10
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS point_allocations (
   id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -84,11 +80,15 @@ CREATE TABLE IF NOT EXISTS point_allocations (
   game_id             bigint NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
   voting_round_id     bigint NOT NULL REFERENCES voting_rounds(voting_round_id) ON DELETE CASCADE,
   voter_player_id     text NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
-  points_slot_1       int NOT NULL CHECK (points_slot_1 >= 0 AND points_slot_1 <= 100),
-  points_slot_2       int NOT NULL CHECK (points_slot_2 >= 0 AND points_slot_2 <= 100),
-  points_slot_3       int NOT NULL CHECK (points_slot_3 >= 0 AND points_slot_3 <= 100),
+  points_slot_1       int NOT NULL CHECK (points_slot_1 >= 0 AND points_slot_1 <= 10),
+  points_slot_2       int NOT NULL CHECK (points_slot_2 >= 0 AND points_slot_2 <= 10),
+  points_slot_3       int NOT NULL CHECK (points_slot_3 >= 0 AND points_slot_3 <= 10),
   submitted_at        timestamptz NOT NULL DEFAULT now(),
-  CONSTRAINT point_allocations_sum_100 CHECK (points_slot_1 + points_slot_2 + points_slot_3 = 100)
+  CONSTRAINT point_allocations_sum_10 CHECK (points_slot_1 + points_slot_2 + points_slot_3 = 10)
 );
 
 CREATE INDEX IF NOT EXISTS idx_point_allocations_round ON point_allocations(voting_round_id);
+
+-- Timing: seconds from first allocation round start (round 1) and from current round start, at submit time
+ALTER TABLE point_allocations ADD COLUMN IF NOT EXISTS seconds_since_session_start double precision;
+ALTER TABLE point_allocations ADD COLUMN IF NOT EXISTS seconds_since_round_start double precision;

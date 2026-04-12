@@ -1,14 +1,11 @@
 """
 Modular prompting/voting heuristics for the Promptcraft experiment.
-
-Swap implementations by changing registry entries or replacing placeholder_perplexity_normalized.
 """
 from __future__ import annotations
 
-import hashlib
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 
 def word_count(text: str) -> int:
@@ -17,15 +14,11 @@ def word_count(text: str) -> int:
     return len(re.findall(r"\S+", str(text).strip()))
 
 
-def placeholder_perplexity_normalized(text: str, prompt_index: int = 1) -> float:
-    """
-    Deterministic pseudo-complexity in ~[0.12, 0.95] from prompt content + index.
-    Replace with real perplexity / Gemini scoring later (see proposal.md).
-    """
-    raw = f"{prompt_index}|{text or ''}".encode("utf-8", errors="ignore")
-    h = hashlib.sha256(raw).digest()
-    x = int.from_bytes(h[:4], "big") / 0xFFFFFFFF
-    return round(0.12 + 0.83 * x, 4)
+def format_seconds_mm_ss(total_seconds: int) -> str:
+    """Format elapsed seconds (e.g. 0–300) as M:SS for UI."""
+    s = max(0, int(total_seconds))
+    m, sec = divmod(s, 60)
+    return f"{m}:{sec:02d}"
 
 
 @dataclass(frozen=True)
@@ -35,32 +28,45 @@ class HeuristicDef:
     description: str
 
 
-# IDs stable for analytics columns / JSON keys
-HEURISTIC_NUMBER_OF_PROMPTS = HeuristicDef(
-    id="number_of_prompts",
-    label="Number of prompts",
-    description="Prompt index for this generated image (1-based).",
+# Stable IDs for analytics / JSON snapshots
+HEURISTIC_PROMPT_INDEX = HeuristicDef(
+    id="prompt_index",
+    label="Prompt #",
+    description="1-based prompt index in this round.",
 )
-HEURISTIC_TOTAL_WORD_COUNT = HeuristicDef(
-    id="total_word_count",
-    label="Total word count",
-    description="Words written across prompts up to and including this image.",
+HEURISTIC_WORD_COUNT_PROMPT = HeuristicDef(
+    id="word_count_prompt",
+    label="Word count",
+    description="Word count for this prompt only.",
 )
-HEURISTIC_PROMPT_COMPLEXITY = HeuristicDef(
-    id="prompt_complexity",
-    label="Prompt complexity",
-    description="Normalized complexity score (placeholder until real perplexity).",
+HEURISTIC_TIME_IN_ROUND = HeuristicDef(
+    id="time_in_round_seconds",
+    label="Timestamp",
+    description="Seconds after round start when the prompt was sent (0–300 for a 5-minute round); shown as M:SS.",
+)
+# Aggregate under target (two metrics only)
+HEURISTIC_TOTAL_PROMPTS = HeuristicDef(
+    id="total_prompts",
+    label="Prompts sent",
+    description="Number of successful prompts in this round so far.",
+)
+HEURISTIC_TOTAL_WORDS_ROUND = HeuristicDef(
+    id="total_word_count_round",
+    label="Total words",
+    description="Sum of word counts across all prompts so far in this round.",
 )
 
 HEURISTIC_REGISTRY: Dict[str, HeuristicDef] = {
-    HEURISTIC_NUMBER_OF_PROMPTS.id: HEURISTIC_NUMBER_OF_PROMPTS,
-    HEURISTIC_TOTAL_WORD_COUNT.id: HEURISTIC_TOTAL_WORD_COUNT,
-    HEURISTIC_PROMPT_COMPLEXITY.id: HEURISTIC_PROMPT_COMPLEXITY,
+    HEURISTIC_PROMPT_INDEX.id: HEURISTIC_PROMPT_INDEX,
+    HEURISTIC_WORD_COUNT_PROMPT.id: HEURISTIC_WORD_COUNT_PROMPT,
+    HEURISTIC_TIME_IN_ROUND.id: HEURISTIC_TIME_IN_ROUND,
+    HEURISTIC_TOTAL_PROMPTS.id: HEURISTIC_TOTAL_PROMPTS,
+    HEURISTIC_TOTAL_WORDS_ROUND.id: HEURISTIC_TOTAL_WORDS_ROUND,
 }
 
 
 def cumulative_word_count_for_round(images: List[dict], up_to_index_inclusive: int) -> int:
-    """images: server image_entry list in order; up_to_index_inclusive is 1-based prompt_index."""
+    """Words across prompts with index <= up_to_index_inclusive (1-based)."""
     total = 0
     for img in images:
         idx = img.get("prompt_index") or 0
@@ -68,7 +74,7 @@ def cumulative_word_count_for_round(images: List[dict], up_to_index_inclusive: i
             continue
         if idx > up_to_index_inclusive:
             break
-        p = img.get("prompt") or ""
+        p = img.get("prompt", "")
         total += word_count(p)
     return total
 
@@ -78,50 +84,78 @@ def snapshot_for_image_entry(
     prompt_index: int,
     prompt_text: str,
     images_before_and_including: List[dict],
+    prompt_elapsed_seconds: int,
 ) -> Dict[str, Any]:
-    cum_words = cumulative_word_count_for_round(images_before_and_including, prompt_index)
-    ppn = placeholder_perplexity_normalized(prompt_text, prompt_index)
+    wc = word_count(prompt_text)
+    elapsed = max(0, min(int(prompt_elapsed_seconds), 3600))
     return {
-        HEURISTIC_NUMBER_OF_PROMPTS.id: prompt_index,
-        HEURISTIC_TOTAL_WORD_COUNT.id: cum_words,
-        HEURISTIC_PROMPT_COMPLEXITY.id: ppn,
+        HEURISTIC_PROMPT_INDEX.id: prompt_index,
+        HEURISTIC_WORD_COUNT_PROMPT.id: wc,
+        HEURISTIC_TIME_IN_ROUND.id: elapsed,
+    }
+
+
+def aggregate_snapshot_for_round(*, total_prompts: int, total_words: int) -> Dict[str, Any]:
+    """Totals under target (T_NA / T_HU prompting)."""
+    return {
+        HEURISTIC_TOTAL_PROMPTS.id: total_prompts,
+        HEURISTIC_TOTAL_WORDS_ROUND.id: total_words,
     }
 
 
 def format_snapshot_for_ui(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
-    """Label + formatted value for client display."""
+    """Label + formatted value for prompting, selection, or voting fixture snapshots."""
     out: List[Dict[str, str]] = []
-    order = [
-        HEURISTIC_NUMBER_OF_PROMPTS,
-        HEURISTIC_TOTAL_WORD_COUNT,
-        HEURISTIC_PROMPT_COMPLEXITY,
-    ]
-    for h in order:
+    idx = snapshot.get(HEURISTIC_PROMPT_INDEX.id)
+    if idx is None:
+        idx = snapshot.get("number_of_prompts")
+    if idx is not None:
+        out.append(
+            {
+                "id": HEURISTIC_PROMPT_INDEX.id,
+                "label": HEURISTIC_PROMPT_INDEX.label,
+                "value": str(int(idx)),
+            }
+        )
+    wc = snapshot.get(HEURISTIC_WORD_COUNT_PROMPT.id)
+    if wc is None:
+        wc = snapshot.get("total_word_count")
+    if wc is not None:
+        out.append(
+            {
+                "id": HEURISTIC_WORD_COUNT_PROMPT.id,
+                "label": HEURISTIC_WORD_COUNT_PROMPT.label,
+                "value": str(int(wc)),
+            }
+        )
+    t = snapshot.get(HEURISTIC_TIME_IN_ROUND.id)
+    if t is not None:
+        out.append(
+            {
+                "id": HEURISTIC_TIME_IN_ROUND.id,
+                "label": HEURISTIC_TIME_IN_ROUND.label,
+                "value": format_seconds_mm_ss(int(t)),
+            }
+        )
+    return out
+
+
+def format_aggregate_for_ui(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
+    out: List[Dict[str, str]] = []
+    for h in (HEURISTIC_TOTAL_PROMPTS, HEURISTIC_TOTAL_WORDS_ROUND):
         v = snapshot.get(h.id)
         if v is None:
             continue
-        if h.id == HEURISTIC_PROMPT_COMPLEXITY.id:
-            pct = max(0.0, min(1.0, float(v))) * 100.0
-            text = f"{pct:.0f}%"
-        else:
-            text = str(int(v)) if isinstance(v, (int, float)) and h.id != HEURISTIC_PROMPT_COMPLEXITY.id else str(v)
+        text = str(int(v)) if isinstance(v, (int, float)) else str(v)
         out.append({"id": h.id, "label": h.label, "value": text})
     return out
 
 
-def aggregate_snapshot_for_round(*, total_prompts: int, total_words: int, complexities: List[float]) -> Dict[str, Any]:
-    """Aggregate under target (T_NA / T_HU prompting)."""
-    avg_c = sum(complexities) / len(complexities) if complexities else 0.0
-    return {
-        HEURISTIC_NUMBER_OF_PROMPTS.id: total_prompts,
-        HEURISTIC_TOTAL_WORD_COUNT.id: total_words,
-        HEURISTIC_PROMPT_COMPLEXITY.id: round(avg_c, 4),
-    }
+def show_prompting_heuristics(condition: Optional[str]) -> bool:
+    c = (condition or "").strip().upper()
+    return c in ("T_NA", "T_HU")
 
 
-def show_prompting_heuristics(team: Optional[str]) -> bool:
-    return team in ("T_NA", "T_HU")
-
-
-def show_voting_heuristics(team: Optional[str]) -> bool:
-    return team in ("C_HU", "T_HU")
+def show_voting_heuristics(condition: Optional[str]) -> bool:
+    c = (condition or "").strip().upper()
+    return c in ("C_HU", "T_HU")
