@@ -87,6 +87,66 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.player-item--self {
+    border-left: 4px solid #667eea;
+    background: linear-gradient(90deg, rgba(102, 126, 234, 0.1) 0%, #fff 18px);
+}
+
+.player-item-main {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.player-item-name {
+    font-weight: 600;
+}
+
+.player-item-you-pill {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #4338ca;
+    background: #eef2ff;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid #c7d2fe;
+}
+
+.player-lobby-status {
+    padding: 4px 10px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    flex-shrink: 0;
+}
+
+.player-lobby-status--waiting {
+    background: #e5e7eb;
+    color: #374151;
+}
+
+.player-lobby-status--ready {
+    background: #ffedd5;
+    color: #9a3412;
+}
+
+.player-lobby-status--ready-green {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.player-lobby-status--admin {
+    background: #667eea;
+    color: white;
 }
 
 .player-team-badge {
@@ -119,9 +179,51 @@ body {
 
 .admin-controls {
     display: flex;
+    flex-wrap: wrap;
     gap: 10px;
     justify-content: center;
     margin-top: 20px;
+}
+
+.post-game-survey-container {
+    max-width: 720px;
+    margin: 0 auto;
+    text-align: left;
+}
+
+.post-game-survey-title-main {
+    text-align: center;
+    margin-bottom: 8px;
+}
+
+.post-game-survey-intro {
+    text-align: center;
+    color: #495057;
+    margin-bottom: 20px;
+}
+
+.gameover-post-survey-hint {
+    text-align: center;
+    color: #495057;
+    margin: 16px 0;
+    font-size: 0.95rem;
+    max-width: 520px;
+    margin-left: auto;
+    margin-right: auto;
+}
+
+.btn-secondary {
+    background: #6c757d;
+    color: #fff;
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: #5c636a;
+}
+
+.btn-secondary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
 }
 
 .game-rules {

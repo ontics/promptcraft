@@ -181,6 +181,58 @@ def update_player_pre_survey(
         return False
 
 
+def player_has_completed_post_survey(game_id: int, player_id: str) -> bool:
+    """True if post_survey_submitted_at is set for this player row and game."""
+    if not is_configured() or not game_id or not player_id:
+        return False
+    try:
+        result = (
+            supabase.table('players')
+            .select('post_survey_submitted_at')
+            .eq('game_id', game_id)
+            .eq('player_id', player_id)
+            .execute()
+        )
+        if result.data and result.data[0].get('post_survey_submitted_at'):
+            return True
+    except Exception as e:
+        print(f"❌ Error checking post-survey: {e}")
+    return False
+
+
+def update_player_post_survey(
+    game_id: int,
+    player_id: str,
+    free_q1: str,
+    free_q2: str,
+    free_q3: str,
+    free_q4: str,
+    likert_best_work: str,
+    likert_effort: str,
+) -> bool:
+    """Persist post-game survey answers on the analytics `players` row."""
+    if not is_configured() or not game_id or not player_id:
+        return False
+    try:
+        now = datetime.utcnow().isoformat()
+        supabase.table('players').update(
+            {
+                'post_survey_free_q1': free_q1,
+                'post_survey_free_q2': free_q2,
+                'post_survey_free_q3': free_q3,
+                'post_survey_free_q4': free_q4,
+                'post_survey_likert_best_work': likert_best_work,
+                'post_survey_likert_effort': likert_effort,
+                'post_survey_submitted_at': now,
+            }
+        ).eq('player_id', player_id).eq('game_id', game_id).execute()
+        print(f"✅ Saved post-survey for player {player_id[:8]}... game_id={game_id}")
+        return True
+    except Exception as e:
+        print(f"❌ Error updating post-survey: {e}")
+        return False
+
+
 def flush_pre_survey_pending_to_player(player_id: str, game_id: int) -> None:
     """Copy lobby-time pre-survey from pre_survey_pending onto `players`, then remove pending."""
     if not is_configured() or not game_id or not player_id:

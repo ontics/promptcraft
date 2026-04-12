@@ -43,6 +43,9 @@ let gameState = {
     imageContextBulletsEnabled: false,
     /** Server-authoritative allocation voting round index while on #voting-screen. */
     allocationRoundIndex: 1,
+    postSurveyCompleted: false,
+    postSurveyActive: false,
+    canStartPostSurvey: false,
 };
 
 let timerInterval;
@@ -139,7 +142,8 @@ const screens = {
     selection: document.getElementById('selection-screen'),
     voting: document.getElementById('voting-screen'),
     results: document.getElementById('results-screen'),
-    gameover: document.getElementById('gameover-screen')
+    gameover: document.getElementById('gameover-screen'),
+    postGameSurvey: document.getElementById('post-game-survey-screen'),
 };
 
 /** Gamemaster Round Controls: full buttons for live play; onboarding prompting shows End Round only. */
@@ -401,6 +405,7 @@ function initLobbyPreSurvey() {
 
 document.addEventListener('DOMContentLoaded', () => {
     initLobbyPreSurvey();
+    initPostGameSurveyListeners();
 });
 // Utility function to show screen
 function showScreen(screenName) {
@@ -411,6 +416,124 @@ function showScreen(screenName) {
     if (next) next.classList.add('active');
     if (screenName === 'lobby') {
         showLobbySurveyForPlayer();
+    }
+    if (gameState.isAdmin) {
+        syncStartPostSurveyButton();
+    }
+}
+
+function syncStartPostSurveyButton() {
+    const btn = document.getElementById('start-post-survey-btn');
+    if (!btn) return;
+    if (!gameState.isAdmin) {
+        btn.disabled = true;
+        return;
+    }
+    const active = gameState.postSurveyActive;
+    // Always clickable except while a survey is already open (server will error if other preconditions fail)
+    btn.disabled = active;
+    btn.title = active
+        ? 'Post-game survey is already open for players.'
+        : 'Open the post-game survey for everyone in this session. Requires at least one player and a started game with database records; you will see a message if it cannot run yet.';
+}
+
+function resetPostGameSurveyForm() {
+    for (let i = 1; i <= 4; i++) {
+        const el = document.getElementById(`post-free-q${i}`);
+        if (el) {
+            el.value = '';
+            el.disabled = false;
+        }
+    }
+    document.querySelectorAll('input[name="post-likert-best-work"]').forEach((r) => {
+        r.checked = false;
+        r.disabled = false;
+    });
+    document.querySelectorAll('input[name="post-likert-effort"]').forEach((r) => {
+        r.checked = false;
+        r.disabled = false;
+    });
+    const err = document.getElementById('post-game-survey-error');
+    if (err) {
+        err.style.display = 'none';
+        err.textContent = '';
+    }
+    const wrap = document.getElementById('post-game-survey-form-wrap');
+    const done = document.getElementById('post-game-survey-done');
+    if (wrap) wrap.style.display = 'block';
+    if (done) done.style.display = 'none';
+    const submit = document.getElementById('post-game-survey-submit-btn');
+    if (submit) {
+        submit.disabled = true;
+        delete submit.dataset.submitted;
+    }
+    updatePostGameSurveySubmitEnabled();
+}
+
+function updatePostGameSurveySubmitEnabled() {
+    const submit = document.getElementById('post-game-survey-submit-btn');
+    if (!submit || submit.dataset.submitted === '1') return;
+    const q1 = (document.getElementById('post-free-q1')?.value || '').trim();
+    const q2 = (document.getElementById('post-free-q2')?.value || '').trim();
+    const q3 = (document.getElementById('post-free-q3')?.value || '').trim();
+    const q4 = (document.getElementById('post-free-q4')?.value || '').trim();
+    const l1 = document.querySelector('input[name="post-likert-best-work"]:checked');
+    const l2 = document.querySelector('input[name="post-likert-effort"]:checked');
+    submit.disabled = !(q1 && q2 && q3 && q4 && l1 && l2);
+}
+
+function initPostGameSurveyListeners() {
+    for (let i = 1; i <= 4; i++) {
+        document.getElementById(`post-free-q${i}`)?.addEventListener('input', updatePostGameSurveySubmitEnabled);
+    }
+    document.querySelectorAll('input[name="post-likert-best-work"], input[name="post-likert-effort"]').forEach((el) => {
+        el.addEventListener('change', updatePostGameSurveySubmitEnabled);
+    });
+    document.getElementById('post-game-survey-submit-btn')?.addEventListener('click', () => {
+        const err = document.getElementById('post-game-survey-error');
+        if (err) {
+            err.style.display = 'none';
+            err.textContent = '';
+        }
+        const free_q1 = (document.getElementById('post-free-q1')?.value || '').trim();
+        const free_q2 = (document.getElementById('post-free-q2')?.value || '').trim();
+        const free_q3 = (document.getElementById('post-free-q3')?.value || '').trim();
+        const free_q4 = (document.getElementById('post-free-q4')?.value || '').trim();
+        const likert_best_work = document.querySelector('input[name="post-likert-best-work"]:checked')?.value;
+        const likert_effort = document.querySelector('input[name="post-likert-effort"]:checked')?.value;
+        if (!free_q1 || !free_q2 || !free_q3 || !free_q4 || !likert_best_work || !likert_effort) {
+            if (err) {
+                err.textContent = 'Please answer every question before submitting.';
+                err.style.display = 'block';
+            }
+            return;
+        }
+        socket.emit('submit_post_game_survey', {
+            free_q1,
+            free_q2,
+            free_q3,
+            free_q4,
+            likert_best_work,
+            likert_effort,
+        });
+    });
+    document.getElementById('post-game-survey-back-btn')?.addEventListener('click', () => {
+        socket.emit('back_to_home');
+    });
+    document.getElementById('start-post-survey-btn')?.addEventListener('click', () => {
+        if (!gameState.isAdmin) return;
+        if (gameState.postSurveyActive) return;
+        if (!confirm('Open the post-game survey for all connected players now?')) return;
+        socket.emit('admin_start_post_survey');
+    });
+}
+
+function applyPostSurveyFlagsFromServer(data) {
+    if (data.post_survey_active !== undefined) {
+        gameState.postSurveyActive = !!data.post_survey_active;
+    }
+    if (data.can_start_post_survey !== undefined) {
+        gameState.canStartPostSurvey = !!data.can_start_post_survey;
     }
 }
 
@@ -576,6 +699,13 @@ socket.on('game_joined', (data) => {
         gameState.playerCharacter = data.player.character;
         gameState.isAdmin = data.player.is_admin;
         gameState.surveyCompleted = data.player.survey_completed === true;
+        if (data.player.post_survey_completed !== undefined) {
+            gameState.postSurveyCompleted = !!data.player.post_survey_completed;
+        }
+        if (data.player.post_survey_active !== undefined) {
+            gameState.postSurveyActive = !!data.player.post_survey_active;
+        }
+        gameState.canStartPostSurvey = false;
 
         const playerDisplayName = document.getElementById('player-display-name');
         if (playerDisplayName) {
@@ -596,20 +726,17 @@ socket.on('game_joined', (data) => {
             aliasEl.style.display = 'block';
         }
 
-        // Show admin controls if admin (but hide admin screen - they're a player in lobby)
-        if (data.player.is_admin) {
-            const adminControls = document.getElementById('admin-controls');
-            if (adminControls) {
-                adminControls.style.display = 'flex';
-            }
-        }
-
         // Update lobby player list
         if (data.lobby_players) {
             updatePlayerList(data.lobby_players);
         }
 
         showLobbySurveyForPlayer();
+
+        if (!gameState.isAdmin && gameState.postSurveyActive && !gameState.postSurveyCompleted) {
+            resetPostGameSurveyForm();
+            showScreen('postGameSurvey');
+        }
 
         console.log('Joined game as', data.player.name);
     } catch (error) {
@@ -624,6 +751,7 @@ socket.on('admin_joined', (data) => {
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
     gameState.onboardingPhase = 'prompting';
+    applyPostSurveyFlagsFromServer(data);
 
     // Show admin screen in lobby
     const adminScreen = document.getElementById('admin-screen');
@@ -634,7 +762,8 @@ socket.on('admin_joined', (data) => {
     if (adminControls) {
         adminControls.style.display = 'flex';
     }
-    
+    syncStartPostSurveyButton();
+
     // Update admin player list
     updateAdminPlayerList(data.players);
     showLobbySurveyForPlayer();
@@ -786,10 +915,38 @@ socket.on('player_status_update', (data) => {
     if (data.players) {
         console.log('Condition assignments in update:', data.players.map(p => ({name: p.name, condition: playerCondition(p)})));
     }
+    applyPostSurveyFlagsFromServer(data);
     if (gameState.isAdmin) {
         updateAdminPlayerList(data.players);
+        syncStartPostSurveyButton();
     } else {
         console.warn('player_status_update received but user is not admin');
+    }
+});
+
+socket.on('post_survey_started', () => {
+    if (gameState.isAdmin) return;
+    gameState.postSurveyActive = true;
+    if (gameState.postSurveyCompleted) return;
+    const hintGo = document.getElementById('gameover-post-survey-hint');
+    if (hintGo) hintGo.style.display = 'none';
+    const backBtn = document.getElementById('back-to-home-btn');
+    if (backBtn) backBtn.style.display = 'none';
+    resetPostGameSurveyForm();
+    showScreen('postGameSurvey');
+});
+
+socket.on('post_game_survey_saved', () => {
+    if (gameState.isAdmin) return;
+    gameState.postSurveyCompleted = true;
+    const wrap = document.getElementById('post-game-survey-form-wrap');
+    const done = document.getElementById('post-game-survey-done');
+    if (wrap) wrap.style.display = 'none';
+    if (done) done.style.display = 'block';
+    const submit = document.getElementById('post-game-survey-submit-btn');
+    if (submit) {
+        submit.dataset.submitted = '1';
+        submit.disabled = true;
     }
 });
 
@@ -994,6 +1151,18 @@ function updateAdminPlayerList(players) {
         `;
         adminPlayerList.appendChild(surveyCountsEl);
 
+        if (gameState.postSurveyActive || nonAdminLobby.some((p) => p.post_survey_completed === true)) {
+            const postDone = nonAdminLobby.filter((p) => p.post_survey_completed === true).length;
+            const postPending = nonAdminLobby.length - postDone;
+            const postCountsEl = document.createElement('div');
+            postCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+            postCountsEl.innerHTML = `
+                <div><strong>Post-survey pending:</strong> ${postPending}</div>
+                <div><strong>Post-survey completed:</strong> ${postDone}</div>
+            `;
+            adminPlayerList.appendChild(postCountsEl);
+        }
+
         const clearLobbyBtn = document.createElement('button');
         clearLobbyBtn.className = 'btn btn-danger';
         clearLobbyBtn.style.cssText = 'margin-bottom: 15px; width: 100%; padding: 10px;';
@@ -1093,7 +1262,18 @@ function updateAdminPlayerList(players) {
         let phaseBadge = '';
         if (!player.is_admin) {
             if (isInLobby) {
-                phaseBadge = `<br><small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
+                const preSmall = `<small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
+                const parts = [preSmall];
+                if (gameState.postSurveyActive || player.post_survey_completed === true) {
+                    const pd = player.post_survey_completed === true;
+                    parts.push(
+                        `<small style="color: ${pd ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${pd ? 'Post-survey completed' : 'Post-survey pending'}</small>`
+                    );
+                }
+                phaseBadge = '<br>' + parts.join('<br>');
+            } else if (gameState.postSurveyActive) {
+                const pd = player.post_survey_completed === true;
+                phaseBadge = `<br><small style="color: ${pd ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${pd ? 'Post-survey completed' : 'Post-survey pending'}</small>`;
             } else if (gameState.inOnboarding && gameState.onboardingPhase === 'practice_voting') {
                 const pv = player.practice_vote_submitted === true;
                 phaseBadge = `<br><small style="color: #1864ab; font-weight: 600;">${pv ? '✓ Practice points submitted' : 'Practice voting'}</small>`;
@@ -1167,6 +1347,34 @@ socket.on('lobby_players_update', (data) => {
     updatePlayerList(data.players);
 });
 
+function lobbyRowIsSelf(player) {
+    if (gameState.isAdmin) {
+        return !!player.is_admin;
+    }
+    return !player.is_admin && player.name === gameState.playerName;
+}
+
+function lobbyNonAdminStatus(player) {
+    const cond = playerCondition(player);
+    const hasCondition = cond != null && String(cond).trim() !== '';
+    if (hasCondition) return { key: 'ready-green', label: 'Ready' };
+    if (player.survey_completed) return { key: 'ready', label: 'Ready' };
+    return { key: 'waiting', label: 'Waiting' };
+}
+
+function sortLobbyPlayersForDisplay(players) {
+    const list = Array.isArray(players) ? [...players] : [];
+    list.sort((a, b) => {
+        const aSelf = lobbyRowIsSelf(a) ? 0 : 1;
+        const bSelf = lobbyRowIsSelf(b) ? 0 : 1;
+        if (aSelf !== bSelf) return aSelf - bSelf;
+        const an = (a.name || '').toString();
+        const bn = (b.name || '').toString();
+        return an.localeCompare(bn, undefined, { sensitivity: 'base' });
+    });
+    return list;
+}
+
 function updatePlayerList(players) {
     const playerList = document.getElementById('player-list');
     if (!playerList) {
@@ -1174,41 +1382,46 @@ function updatePlayerList(players) {
         return;
     }
     playerList.innerHTML = '';
-    
-    // Count non-admin players
-    let nonAdminCount = 0;
 
-    // Story: hide group assignment from the lobby UI.
-    // Admin/Gamemaster view still shows groups via `updateAdminPlayerList()`.
-    
-    players.forEach(player => {
+    let nonAdminCount = 0;
+    const ordered = sortLobbyPlayersForDisplay(players);
+
+    ordered.forEach((player) => {
         const item = document.createElement('div');
         item.className = 'player-item';
-        
-        // Determine badge text and styling
-        let badgeText = '';
-        let badgeClass = '';
-        let badgeStyle = '';
-        let showBadge = false;
+        item.setAttribute('role', 'listitem');
+
+        const isSelf = lobbyRowIsSelf(player);
+        if (isSelf) {
+            item.classList.add('player-item--self');
+        }
+
+        let statusHtml = '';
+        let ariaStatus = '';
+
         if (player.is_admin) {
-            badgeText = 'Admin';
-            badgeStyle = 'background: #667eea; color: white;';
-            showBadge = true;
+            ariaStatus = 'Gamemaster';
+            statusHtml = '<span class="player-lobby-status player-lobby-status--admin">Admin</span>';
         } else {
             nonAdminCount++;
-            if (!playerCondition(player)) {
-            badgeText = 'Waiting';
-            badgeStyle = 'background: #e0e0e0;';
-                showBadge = true;
-            }
+            const st = lobbyNonAdminStatus(player);
+            ariaStatus = st.label;
+            statusHtml = `<span class="player-lobby-status player-lobby-status--${st.key}">${st.label}</span>`;
         }
-        
-        // Connection status removed from lobby display (still tracked for admin dashboard)
-        
-        item.innerHTML = `<span>${player.name}</span>${showBadge ? `<span class="player-team-badge ${badgeClass}" style="${badgeStyle}">${badgeText}</span>` : ''}`;
+
+        const youPill = isSelf
+            ? '<span class="player-item-you-pill" aria-hidden="true">You</span>'
+            : '';
+
+        const nameParts = `<span class="player-item-name">${player.name}</span>${youPill}`;
+        item.innerHTML = `<div class="player-item-main">${nameParts}</div>${statusHtml}`;
+
+        const youBit = isSelf ? 'You, ' : '';
+        item.setAttribute('aria-label', `${youBit}${player.name}, ${ariaStatus}`);
+
         playerList.appendChild(item);
     });
-    
+
     const lobbyCountEl = document.getElementById('lobby-count');
     if (lobbyCountEl) {
         lobbyCountEl.textContent = nonAdminCount;
@@ -2428,6 +2641,11 @@ socket.on('game_over', (data) => {
     }
     showScreen('gameover');
 
+    const hintGo = document.getElementById('gameover-post-survey-hint');
+    if (hintGo) hintGo.style.display = 'block';
+    const backBtnGo = document.getElementById('back-to-home-btn');
+    if (backBtnGo) backBtnGo.style.display = '';
+
     const finalResults = document.getElementById('final-results');
     if (data.experiment) {
         finalResults.innerHTML = '<h2>Game results</h2>';
@@ -2490,6 +2708,10 @@ socket.on('game_restarted', (data) => {
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
+    gameState.postSurveyActive = false;
+    gameState.postSurveyCompleted = false;
+    gameState.canStartPostSurvey = false;
+    syncStartPostSurveyButton();
         
         // Show message if provided
         if (data && data.message) {
@@ -2503,6 +2725,11 @@ socket.on('game_restarted_kick', (data) => {
     showScreen('lobby');
     
     // Clear all game state
+    gameState.postSurveyActive = false;
+    gameState.postSurveyCompleted = false;
+    gameState.canStartPostSurvey = false;
+    delete document.getElementById('post-game-survey-submit-btn')?.dataset?.submitted;
+    resetPostGameSurveyForm();
     gameState.imageContextBulletsEnabled = false;
     syncImageContextBulletsVisibility();
     gameState.currentRound = 0;
@@ -2555,6 +2782,15 @@ socket.on('error', (data) => {
         if (err) {
             err.textContent = msg;
             err.style.display = 'block';
+            return;
+        }
+    }
+    const pgScreen = screens.postGameSurvey;
+    if (pgScreen && pgScreen.classList.contains('active')) {
+        const errPg = document.getElementById('post-game-survey-error');
+        if (errPg) {
+            errPg.textContent = msg;
+            errPg.style.display = 'block';
             return;
         }
     }
@@ -2749,6 +2985,14 @@ socket.on('return_to_lobby', (data) => {
     if (gameState.transitionCountdown) {
         clearInterval(gameState.transitionCountdown);
         gameState.transitionCountdown = null;
+    }
+
+    const hintRt = document.getElementById('gameover-post-survey-hint');
+    if (hintRt) hintRt.style.display = 'none';
+    delete document.getElementById('post-game-survey-submit-btn')?.dataset?.submitted;
+    resetPostGameSurveyForm();
+    if (gameState.isAdmin) {
+        syncStartPostSurveyButton();
     }
 });
 
