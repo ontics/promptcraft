@@ -1350,6 +1350,34 @@ socket.on('lobby_players_update', (data) => {
     updatePlayerList(data.players);
 });
 
+function lobbyRowIsSelf(player) {
+    if (gameState.isAdmin) {
+        return !!player.is_admin;
+    }
+    return !player.is_admin && player.name === gameState.playerName;
+}
+
+function lobbyNonAdminStatus(player) {
+    const team = player.team;
+    const hasTeam = team != null && String(team).trim() !== '';
+    if (hasTeam) return { key: 'ready-green', label: 'Ready' };
+    if (player.survey_completed) return { key: 'ready', label: 'Ready' };
+    return { key: 'waiting', label: 'Waiting' };
+}
+
+function sortLobbyPlayersForDisplay(players) {
+    const list = Array.isArray(players) ? [...players] : [];
+    list.sort((a, b) => {
+        const aSelf = lobbyRowIsSelf(a) ? 0 : 1;
+        const bSelf = lobbyRowIsSelf(b) ? 0 : 1;
+        if (aSelf !== bSelf) return aSelf - bSelf;
+        const an = (a.name || '').toString();
+        const bn = (b.name || '').toString();
+        return an.localeCompare(bn, undefined, { sensitivity: 'base' });
+    });
+    return list;
+}
+
 function updatePlayerList(players) {
     const playerList = document.getElementById('player-list');
     if (!playerList) {
@@ -1357,41 +1385,46 @@ function updatePlayerList(players) {
         return;
     }
     playerList.innerHTML = '';
-    
-    // Count non-admin players
-    let nonAdminCount = 0;
 
-    // Story: hide group assignment from the lobby UI.
-    // Admin/Gamemaster view still shows groups via `updateAdminPlayerList()`.
-    
-    players.forEach(player => {
+    let nonAdminCount = 0;
+    const ordered = sortLobbyPlayersForDisplay(players);
+
+    ordered.forEach((player) => {
         const item = document.createElement('div');
         item.className = 'player-item';
-        
-        // Determine badge text and styling
-        let badgeText = '';
-        let badgeClass = '';
-        let badgeStyle = '';
-        let showBadge = false;
+        item.setAttribute('role', 'listitem');
+
+        const isSelf = lobbyRowIsSelf(player);
+        if (isSelf) {
+            item.classList.add('player-item--self');
+        }
+
+        let statusHtml = '';
+        let ariaStatus = '';
+
         if (player.is_admin) {
-            badgeText = 'Admin';
-            badgeStyle = 'background: #667eea; color: white;';
-            showBadge = true;
+            ariaStatus = 'Gamemaster';
+            statusHtml = '<span class="player-lobby-status player-lobby-status--admin">Admin</span>';
         } else {
             nonAdminCount++;
-            if (!player.team) {
-            badgeText = 'Waiting';
-            badgeStyle = 'background: #e0e0e0;';
-                showBadge = true;
-            }
+            const st = lobbyNonAdminStatus(player);
+            ariaStatus = st.label;
+            statusHtml = `<span class="player-lobby-status player-lobby-status--${st.key}">${st.label}</span>`;
         }
-        
-        // Connection status removed from lobby display (still tracked for admin dashboard)
-        
-        item.innerHTML = `<span>${player.name}</span>${showBadge ? `<span class="player-team-badge ${badgeClass}" style="${badgeStyle}">${badgeText}</span>` : ''}`;
+
+        const youPill = isSelf
+            ? '<span class="player-item-you-pill" aria-hidden="true">You</span>'
+            : '';
+
+        const nameParts = `<span class="player-item-name">${player.name}</span>${youPill}`;
+        item.innerHTML = `<div class="player-item-main">${nameParts}</div>${statusHtml}`;
+
+        const youBit = isSelf ? 'You, ' : '';
+        item.setAttribute('aria-label', `${youBit}${player.name}, ${ariaStatus}`);
+
         playerList.appendChild(item);
     });
-    
+
     const lobbyCountEl = document.getElementById('lobby-count');
     if (lobbyCountEl) {
         lobbyCountEl.textContent = nonAdminCount;
