@@ -28,7 +28,8 @@ ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS selection_steps_back_from_
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS voting_rounds (
   voting_round_id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  game_id           bigint NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+  -- INTEGER matches games.game_id (SERIAL) from bootstrap schema
+  game_id           integer NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
   voting_round_index int NOT NULL,
   kind              text NOT NULL CHECK (kind IN ('hardcoded', 'final')),
   fixture_set_key   text,
@@ -45,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_voting_rounds_game ON voting_rounds(game_id);
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS voter_ballots (
   ballot_id         bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  game_id           bigint NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+  game_id           integer NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
   voting_round_id   bigint NOT NULL REFERENCES voting_rounds(voting_round_id) ON DELETE CASCADE,
   voter_player_id   text NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
   UNIQUE (voting_round_id, voter_player_id)
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS ballot_options (
   fixture_image_id    text,
   image_url           text NOT NULL,
   owner_player_id     text REFERENCES players(player_id) ON DELETE SET NULL,
-  prompt_id           bigint REFERENCES prompts(prompt_id) ON DELETE SET NULL,
+  prompt_id           integer REFERENCES prompts(prompt_id) ON DELETE SET NULL,
   heuristic_snapshot  jsonb,
   UNIQUE (ballot_id, slot_index)
 );
@@ -77,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_ballot_options_ballot ON ballot_options(ballot_id
 CREATE TABLE IF NOT EXISTS point_allocations (
   id                  bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
   ballot_id           bigint NOT NULL UNIQUE REFERENCES voter_ballots(ballot_id) ON DELETE CASCADE,
-  game_id             bigint NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
+  game_id             integer NOT NULL REFERENCES games(game_id) ON DELETE CASCADE,
   voting_round_id     bigint NOT NULL REFERENCES voting_rounds(voting_round_id) ON DELETE CASCADE,
   voter_player_id     text NOT NULL REFERENCES players(player_id) ON DELETE CASCADE,
   points_slot_1       int NOT NULL CHECK (points_slot_1 >= 0 AND points_slot_1 <= 10),

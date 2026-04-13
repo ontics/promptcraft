@@ -66,14 +66,12 @@ HEURISTIC_REGISTRY: Dict[str, HeuristicDef] = {
 
 
 def cumulative_word_count_for_round(images: List[dict], up_to_index_inclusive: int) -> int:
-    """Words across prompts with index <= up_to_index_inclusive (1-based)."""
+    """Words across prompts with prompt_index <= up_to_index_inclusive (1-based). Order-independent."""
     total = 0
     for img in images:
         idx = img.get("prompt_index") or 0
-        if idx <= 0:
+        if idx <= 0 or idx > up_to_index_inclusive:
             continue
-        if idx > up_to_index_inclusive:
-            break
         p = img.get("prompt", "")
         total += word_count(p)
     return total
@@ -85,13 +83,21 @@ def snapshot_for_image_entry(
     prompt_text: str,
     images_before_and_including: List[dict],
     prompt_elapsed_seconds: int,
+    cumulative_word_count_for_prompt_line: bool = False,
 ) -> Dict[str, Any]:
-    wc = word_count(prompt_text)
+    """If True, per-image word line is total words in the round up to and including this prompt."""
+    if cumulative_word_count_for_prompt_line:
+        wc = cumulative_word_count_for_round(images_before_and_including, prompt_index)
+        wc_label = "Total words"
+    else:
+        wc = word_count(prompt_text)
+        wc_label = HEURISTIC_WORD_COUNT_PROMPT.label
     elapsed = max(0, min(int(prompt_elapsed_seconds), 3600))
     return {
         HEURISTIC_PROMPT_INDEX.id: prompt_index,
         HEURISTIC_WORD_COUNT_PROMPT.id: wc,
         HEURISTIC_TIME_IN_ROUND.id: elapsed,
+        "_word_count_label": wc_label,
     }
 
 
@@ -121,10 +127,11 @@ def format_snapshot_for_ui(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
     if wc is None:
         wc = snapshot.get("total_word_count")
     if wc is not None:
+        wc_lbl = snapshot.get("_word_count_label") or HEURISTIC_WORD_COUNT_PROMPT.label
         out.append(
             {
                 "id": HEURISTIC_WORD_COUNT_PROMPT.id,
-                "label": HEURISTIC_WORD_COUNT_PROMPT.label,
+                "label": wc_lbl,
                 "value": str(int(wc)),
             }
         )
