@@ -8,6 +8,7 @@ import time
 import base64
 import gc
 from datetime import datetime
+from typing import Optional
 from dotenv import load_dotenv
 import io
 from PIL import Image
@@ -18,6 +19,37 @@ load_dotenv()
 import db  # Database helper module
 import heuristics as heur_mod
 from voting_fixtures import FIXTURE_ROUNDS, TOTAL_VOTING_ROUNDS, NUM_HARDCODED_VOTING_ROUNDS
+
+# Allocation rounds 1–9: fixture JSON groups (target Oski / Tree / slug). See story per-player-randomized-allocation-fixture-order-1-9.
+_ALLOC_FIXTURE_GROUP_A = (1, 2, 3)
+_ALLOC_FIXTURE_GROUP_B = (4, 5, 6)
+_ALLOC_FIXTURE_GROUP_C = (7, 8, 9)
+_ALLOC_FIXTURE_GROUPS = (_ALLOC_FIXTURE_GROUP_A, _ALLOC_FIXTURE_GROUP_B, _ALLOC_FIXTURE_GROUP_C)
+
+
+def build_allocation_fixture_order(rng=None):
+    """
+    Per player: a permutation of fixture indices 1..9 such that consecutive ordinals never share a group.
+    Random cycle order of the three groups; each group has a random anchor then shuffled remainder.
+    """
+    r = rng or random
+    cycle = list(_ALLOC_FIXTURE_GROUPS)
+    r.shuffle(cycle)
+    queues = {}
+    for G in _ALLOC_FIXTURE_GROUPS:
+        anchor = r.choice(G)
+        rest = [x for x in G if x != anchor]
+        r.shuffle(rest)
+        queues[G] = [anchor] + rest
+    seq = []
+    for i in range(NUM_HARDCODED_VOTING_ROUNDS):
+        G = cycle[i % 3]
+        seq.append(queues[G].pop(0))
+    return seq
+
+
+ALLOCATION_FINAL_SUBMIT_KEY = '__allocation_final__'
+
 from ballot_balancer import assign_final_ballots
 
 app = Flask(__name__)
@@ -51,11 +83,15 @@ game_state = {
     # Post-game survey: Gamemaster opens via lobby; non-admin players must submit before leaving
     'post_survey_active': False,
     # Point-allocation voting (9 fixture rounds + 1 final); each player advances independently
-    'allocation_round_db_ids': {},  # round_index -> voting_round_id
-    'allocation_round_submitters': {},  # round_index -> set(session_id) submitted that round
-    'allocation_points_recorded': set(),  # (voter_session_id, round_index) with saved points
-    'allocation_ballot_map': {},  # (voter_session_id, round_index) -> ballot_id
-    'allocation_slot_owners': {},  # (voter_session_id, round_index) -> [owner_sid x3]
+    # DB: one voting_rounds row per vignette per game (fixture_set_key), not per display order.
+    'allocation_vignette_vrids': {},  # fixture_set_key -> voting_round_id (shared across voters)
+    'allocation_final_vrid': None,  # shared voting_round_id for kind=final (round 10)
+    'allocation_vignette_submitters': {},  # fixture_set_key | '__allocation_final__' -> set(session_id)
+    'allocation_emit_vrid': {},  # (session_id, display_ordinal_1_to_10) -> voting_round_id used for that emit
+    'allocation_round_submitters': {},  # display_ordinal -> set(session_id) submitted that step (admin / legacy)
+    'allocation_points_recorded': set(),  # (voter_session_id, display_ordinal) with saved points
+    'allocation_ballot_map': {},  # (voter_session_id, display_ordinal) -> ballot_id
+    'allocation_slot_owners': {},  # (voter_session_id, display_ordinal) -> [owner_sid x3]
     'final_allocation_plan': None,  # voter -> [owner_sid x3] for round 10
     # No visible countdown; value only caps auto-advance if clients stop polling (see round_timer_check).
     'allocation_duration': 86400.0,
@@ -2471,14 +2507,34 @@ def _heuristic_snapshot_from_selected(player, prompt_round=3):
     )
 
 
-def _maybe_finalize_voting_round_row(round_index: int) -> None:
-    """Close DB voting_round when every active player has submitted that round."""
-    vid = game_state.get('allocation_round_db_ids', {}).get(round_index)
-    if not vid:
-        return
+def _allocation_fixture_submit_key_for_ordinal(voter_sid: str, display_ordinal: int) -> Optional[str]:
+    """Map display step to DB grouping key: fixture_set_key (1–9) or ALLOCATION_FINAL_SUBMIT_KEY (10)."""
+    if display_ordinal == TOTAL_VOTING_ROUNDS:
+        return ALLOCATION_FINAL_SUBMIT_KEY
+    pl = players.get(voter_sid)
+    if not pl:
+        return None
+    order = pl.get('allocation_fixture_order')
+    if not order or len(order) != NUM_HARDCODED_VOTING_ROUNDS:
+        return None
+    fixture_num = order[display_ordinal - 1]
+    fix = FIXTURE_ROUNDS[fixture_num - 1]
+    return fix['fixture_set_key']
+
+
+def _maybe_finalize_shared_allocation_round(submit_key: str) -> None:
+    """End voting_rounds row when every active allocation player has submitted for this vignette (or final)."""
     expected = set(game_state.get('voting_active_players') or [])
-    done = game_state.setdefault('allocation_round_submitters', {}).setdefault(round_index, set())
-    if expected and expected <= done:
+    if not expected:
+        return
+    subs = game_state.setdefault('allocation_vignette_submitters', {}).get(submit_key) or set()
+    if not subs >= expected:
+        return
+    if submit_key == ALLOCATION_FINAL_SUBMIT_KEY:
+        vid = game_state.get('allocation_final_vrid')
+    else:
+        vid = game_state.get('allocation_vignette_vrids', {}).get(submit_key)
+    if vid:
         db.end_voting_round_row(vid)
 
 
@@ -2498,7 +2554,10 @@ def start_allocation_voting_phase() -> None:
     game_state['allocation_session_started_at'] = time.time()
     game_state['allocation_experiment_finalized'] = False
     game_state['allocation_duration'] = 86400.0
-    game_state['allocation_round_db_ids'] = {}
+    game_state['allocation_vignette_vrids'] = {}
+    game_state['allocation_final_vrid'] = None
+    game_state['allocation_vignette_submitters'] = {}
+    game_state['allocation_emit_vrid'] = {}
     game_state['allocation_round_submitters'] = {}
     game_state['allocation_points_recorded'] = set()
     game_state['allocation_ballot_map'] = {}
@@ -2514,6 +2573,11 @@ def start_allocation_voting_phase() -> None:
     except Exception as e:
         print(f"[ALLOC] Final ballot plan precompute failed: {e}")
     game_state['final_allocation_plan'] = plan
+
+    for p in non_admin:
+        p['allocation_fixture_order'] = build_allocation_fixture_order(
+            random.Random(int.from_bytes(os.urandom(8), 'big'))
+        )
 
     for p in non_admin:
         if not p.get('socket_id'):
@@ -2554,27 +2618,57 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
             return
     else:
         kind = 'hardcoded'
-        fix = FIXTURE_ROUNDS[round_index - 1]
+        order = p.get('allocation_fixture_order')
+        if not order or len(order) != NUM_HARDCODED_VOTING_ROUNDS:
+            print('[ALLOC] missing allocation_fixture_order; generating fallback')
+            p['allocation_fixture_order'] = build_allocation_fixture_order()
+            order = p['allocation_fixture_order']
+        fixture_num = order[round_index - 1]
+        fix = FIXTURE_ROUNDS[fixture_num - 1]
         fixture_key = fix['fixture_set_key']
         target_url = fix['target_image_url']
 
-    vrid = game_state.setdefault('allocation_round_db_ids', {}).get(round_index)
-    if vrid is None and db.is_configured() and gid:
-        vrid = db.create_voting_round_row(
-            game_id=gid,
-            voting_round_index=round_index,
-            kind=kind,
-            fixture_set_key=fixture_key if not is_final else None,
-            target_image_url=target_url,
-        )
-        if vrid:
-            game_state['allocation_round_db_ids'][round_index] = vrid
+    # Shared voting_rounds rows keyed by vignette (fixture_set_key), not display order.
+    vrid = None
+    if db.is_configured() and gid:
+        if is_final:
+            vrid = game_state.get('allocation_final_vrid')
+            if vrid is None:
+                vrid = db.find_voting_round_id_final(gid)
+                if vrid is None:
+                    vrid = db.create_voting_round_row(
+                        game_id=gid,
+                        voting_round_index=TOTAL_VOTING_ROUNDS,
+                        kind=kind,
+                        fixture_set_key=None,
+                        target_image_url=target_url,
+                    )
+                if vrid is None:
+                    vrid = db.find_voting_round_id_final(gid)
+                if vrid:
+                    game_state['allocation_final_vrid'] = vrid
+        else:
+            cache = game_state.setdefault('allocation_vignette_vrids', {})
+            vrid = cache.get(fixture_key)
+            if vrid is None:
+                vrid = db.find_voting_round_id_by_game_fixture_key(gid, fixture_key)
+            if vrid is None:
+                vrid = db.create_voting_round_row(
+                    game_id=gid,
+                    voting_round_index=fixture_num,
+                    kind=kind,
+                    fixture_set_key=fixture_key,
+                    target_image_url=target_url,
+                )
+            if vrid is None:
+                vrid = db.find_voting_round_id_by_game_fixture_key(gid, fixture_key)
+            if vrid:
+                cache[fixture_key] = vrid
 
     key = (voter_sid, round_index)
     opts = []
     slot_owners = []
     if not is_final:
-        fix = FIXTURE_ROUNDS[round_index - 1]
         for i, c in enumerate(fix['candidates'], start=1):
             opts.append({
                 'slot_index': i,
@@ -2620,6 +2714,8 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
         ballot_id = _next_synthetic_ballot_id()
     game_state['allocation_ballot_map'][key] = ballot_id
     game_state['allocation_slot_owners'][key] = slot_owners
+    if vrid is not None:
+        game_state.setdefault('allocation_emit_vrid', {})[key] = vrid
 
     show_h = heur_mod.show_voting_heuristics(p.get('condition'))
     ui_opts = []
@@ -2672,7 +2768,7 @@ def _record_point_allocation(voter_sid: str, triple: list, round_index: int) -> 
         print(f"[ALLOC] skip save voter={voter_sid[:8]}... round mismatch want {round_index} have {pl and pl.get('allocation_player_round')}")
         return
     ballot_id = game_state.get('allocation_ballot_map', {}).get(key)
-    vrid = game_state.get('allocation_round_db_ids', {}).get(round_index)
+    vrid = game_state.get('allocation_emit_vrid', {}).get(key)
     gid = game_state.get('game_id')
     if ballot_id and db.is_configured() and gid and vrid:
         now = time.time()
@@ -2699,7 +2795,10 @@ def _record_point_allocation(voter_sid: str, triple: list, round_index: int) -> 
                 players[own]['incentive_points'] = players[own].get('incentive_points', 0) + int(pts)
     game_state['allocation_points_recorded'].add(key)
     game_state.setdefault('allocation_round_submitters', {}).setdefault(round_index, set()).add(voter_sid)
-    _maybe_finalize_voting_round_row(round_index)
+    sk = _allocation_fixture_submit_key_for_ordinal(voter_sid, round_index)
+    if sk:
+        game_state.setdefault('allocation_vignette_submitters', {}).setdefault(sk, set()).add(voter_sid)
+        _maybe_finalize_shared_allocation_round(sk)
 
 
 def _after_allocation_submit_emit(voter_sid: str, completed_round: int) -> None:
@@ -3885,7 +3984,10 @@ def handle_restart_game():
     game_state['voting_start_time'] = None
     game_state['allocation_session_started_at'] = None
     game_state['allocation_experiment_finalized'] = False
-    game_state['allocation_round_db_ids'] = {}
+    game_state['allocation_vignette_vrids'] = {}
+    game_state['allocation_final_vrid'] = None
+    game_state['allocation_vignette_submitters'] = {}
+    game_state['allocation_emit_vrid'] = {}
     game_state['allocation_round_submitters'] = {}
     game_state['allocation_points_recorded'] = set()
     game_state['allocation_ballot_map'] = {}

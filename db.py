@@ -556,6 +556,47 @@ def save_vote(voter_id: str, voted_for_player_id: str, voted_for_prompt_id: int,
         print(f"❌ Error saving vote: {e}")
 
 
+def find_voting_round_id_by_game_fixture_key(game_id: int, fixture_set_key: str) -> Optional[int]:
+    """Lookup shared hardcoded vignette row: stable identity for cross-player analytics."""
+    if not is_configured() or not game_id or not fixture_set_key:
+        return None
+    try:
+        r = (
+            supabase.table('voting_rounds')
+            .select('voting_round_id')
+            .eq('game_id', game_id)
+            .eq('fixture_set_key', fixture_set_key)
+            .eq('kind', 'hardcoded')
+            .limit(1)
+            .execute()
+        )
+        if r.data:
+            return int(r.data[0]['voting_round_id'])
+    except Exception as e:
+        print(f"❌ Error find_voting_round_id_by_game_fixture_key: {e}")
+    return None
+
+
+def find_voting_round_id_final(game_id: int) -> Optional[int]:
+    """Shared final allocation row (round 10) for this game."""
+    if not is_configured() or not game_id:
+        return None
+    try:
+        r = (
+            supabase.table('voting_rounds')
+            .select('voting_round_id')
+            .eq('game_id', game_id)
+            .eq('kind', 'final')
+            .limit(1)
+            .execute()
+        )
+        if r.data:
+            return int(r.data[0]['voting_round_id'])
+    except Exception as e:
+        print(f"❌ Error find_voting_round_id_final: {e}")
+    return None
+
+
 def create_voting_round_row(
     game_id: int,
     voting_round_index: int,
@@ -563,6 +604,10 @@ def create_voting_round_row(
     fixture_set_key: Optional[str],
     target_image_url: Optional[str],
 ) -> Optional[int]:
+    """
+    voting_round_index: stable content id — fixture file index 1–9 for hardcoded rounds,
+    or TOTAL_VOTING_ROUNDS (10) for kind=final. Not the per-player display order.
+    """
     if not is_configured() or not game_id:
         return None
     try:

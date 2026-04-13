@@ -24,7 +24,8 @@ ALTER TABLE image_selections ADD COLUMN IF NOT EXISTS selection_steps_back_from_
 -- You may keep `votes` for historical data; new code should not insert into it.
 
 -- ---------------------------------------------------------------------------
--- voting_rounds: one row per voting screen (1–10)
+-- voting_rounds: one shared row per hardcoded vignette (fixture_set_key) per game;
+-- one shared row for kind=final per game. voting_round_index = fixture JSON index 1–9 or 10 for final (not display order).
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS voting_rounds (
   voting_round_id   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -34,11 +35,18 @@ CREATE TABLE IF NOT EXISTS voting_rounds (
   fixture_set_key   text,
   target_image_url  text,
   started_at        timestamptz DEFAULT now(),
-  ended_at          timestamptz,
-  UNIQUE (game_id, voting_round_index)
+  ended_at          timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS idx_voting_rounds_game ON voting_rounds(game_id);
+
+CREATE UNIQUE INDEX IF NOT EXISTS voting_rounds_game_fixture_hardcoded_uidx
+  ON voting_rounds (game_id, fixture_set_key)
+  WHERE kind = 'hardcoded' AND fixture_set_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS voting_rounds_game_final_uidx
+  ON voting_rounds (game_id)
+  WHERE kind = 'final';
 
 -- ---------------------------------------------------------------------------
 -- voter_ballots: one ballot per voter per voting_round
