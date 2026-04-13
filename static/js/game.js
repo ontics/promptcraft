@@ -295,6 +295,7 @@ function showOnboardingPracticeVotingFromPayload(data) {
     }
 
     syncImageContextBulletsVisibility();
+    syncAllocationVotingHeaderAlias();
     showScreen('onboardingPracticeVoting');
 }
 
@@ -752,6 +753,9 @@ socket.on('admin_joined', (data) => {
     gameState.inOnboarding = false;
     gameState.onboardingPhase = 'prompting';
     applyPostSurveyFlagsFromServer(data);
+
+    // Lobby holds admin chrome (e.g. Restart Game). Show it even if we were mid-game (recovery).
+    showScreen('lobby');
 
     // Show admin screen in lobby
     const adminScreen = document.getElementById('admin-screen');
@@ -2366,6 +2370,7 @@ socket.on('vote_on_images', (data) => {
     gameState.imageContextBulletsEnabled = data.image_context_bullets === true;
     
     showScreen('voting');
+    syncAllocationVotingHeaderAlias();
 
     // Reset vote state
     gameState.tempVoteSelection = null;
@@ -2469,6 +2474,14 @@ socket.on('vote_on_images', (data) => {
     }
 });
 
+function syncAllocationVotingHeaderAlias() {
+    const name = (gameState.playerName || '').trim();
+    const allocEl = document.getElementById('allocation-voting-player-name');
+    if (allocEl) allocEl.textContent = name;
+    const obEl = document.getElementById('ob-practice-voting-player-name');
+    if (obEl) obEl.textContent = name;
+}
+
 function updateAllocationPointsHeader(a, b, c, elementId) {
     const el = document.getElementById(elementId || 'allocation-points-header');
     if (!el) return;
@@ -2485,6 +2498,7 @@ socket.on('allocation_vote_started', (data) => {
     if (gameState.isAdmin) return;
     clearRoundTimerIfAny();
     showScreen('voting');
+    syncAllocationVotingHeaderAlias();
     gameState.allocationRoundIndex = data.voting_round_index || 1;
     const ins = document.getElementById('allocation-instructions');
     if (ins) ins.textContent = 'Distribute points among the following images';

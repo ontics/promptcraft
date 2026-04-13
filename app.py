@@ -1314,11 +1314,7 @@ def handle_admin_login(data):
         emit('error', {'message': 'Admin password is not configured for this game.'})
         return
 
-    # Only allow admin login from lobby
-    if game_state['status'] != 'lobby':
-        emit('error', {'message': 'Admin login is only available in the lobby.'})
-        return
-
+    # Allow admin login from any game phase so a stuck session can recover (ADMIN_CODE still required).
     # If an admin already exists, disconnect them (remove from game) rather than demote to player.
     old_admin_socket = None
     if admin_session_id in players:
