@@ -98,6 +98,7 @@ game_state = {
     'allocation_session_started_at': None,  # time.time() when allocation phase begins
     'allocation_experiment_finalized': False,
     '_synthetic_ballot_seq': 0,
+    '_synthetic_prompt_seq': 0,  # negative prompt_ids when DB insert fails (in-memory selection only)
 }
 
 players = {}  # session_id: player_data
@@ -1209,9 +1210,10 @@ def handle_admin_start_post_survey():
                 'error',
                 {
                     'message': (
-                        'Post-game survey needs a database game session. Configure Supabase '
-                        '(SUPABASE_URL and SUPABASE_KEY), restart the app, then run Start Game so player '
-                        'rows are created.'
+                        'Post-game survey needs a database game session. Set env vars SUPABASE_URL and '
+                        'SUPABASE_KEY (the service role secret from Supabase Project Settings → API — not '
+                        'anon, not SUPABASE_API_KEY), redeploy, then click Start Game so a game_id and '
+                        'player rows exist.'
                     ),
                 },
             )
@@ -1697,6 +1699,9 @@ def handle_send_prompt(data):
         return
 
     if not is_onboarding:
+        ensure_round_id_for_current_game_if_needed()
+
+    if not is_onboarding:
         buffer_time = 5
         if time.time() > game_state['round_end_time'] + buffer_time:
             emit('error', {'message': 'Round has ended'})
@@ -2063,11 +2068,14 @@ def handle_send_prompt(data):
         snap = None
         agg = None
         if not is_onboarding:
+            # Per-image word count = cumulative words in this round (same as aggregate "Total words" at that moment)
+            cumulative_wc_line = heur_mod.show_prompting_heuristics(player.get('condition'))
             snap = heur_mod.snapshot_for_image_entry(
                 prompt_index=prompt_index,
                 prompt_text=prompt,
                 images_before_and_including=image_bucket,
                 prompt_elapsed_seconds=prompt_elapsed,
+                cumulative_word_count_for_prompt_line=cumulative_wc_line,
             )
             image_entry['heuristic_snapshot'] = snap
             valid_for_agg = [im for im in image_bucket if not im.get('error_type')]
@@ -2139,6 +2147,15 @@ def handle_send_prompt(data):
                     round_number=current_round,  # Round number (1, 2, or 3)
                     callback=clear_base64_after_upload  # Memory optimization callback
                 )
+
+        # In-memory fallback so selection always has an id (DB insert failed, or no Supabase / round row)
+        if not is_onboarding and not image_entry.get('prompt_id'):
+            game_state['_synthetic_prompt_seq'] = game_state.get('_synthetic_prompt_seq', 0) + 1
+            image_entry['prompt_id'] = -game_state['_synthetic_prompt_seq']
+            print(
+                f"[WARN] Assigned synthetic prompt_id={image_entry['prompt_id']} "
+                "(no prompts row — check SUPABASE_URL / SUPABASE_KEY, round_id, and DB errors)"
+            )
 
         ig_payload = {
             'image_data': image_data,
@@ -2405,6 +2422,21 @@ pending_image_generations = {}  # session_id -> list of pending requests
 DEFAULT_POINT_SPLIT = (4, 3, 3)  # must sum to 10
 
 
+def ensure_round_id_for_current_game_if_needed():
+    """If Supabase is on and we have a game but no round row, create one for the current round."""
+    if not db.is_configured() or not game_state.get('game_id'):
+        return
+    if game_state.get('round_id'):
+        return
+    cr = game_state.get('current_round') or 1
+    if cr < 1 or cr > 3:
+        return
+    rid = db.create_round(game_id=game_state['game_id'], round_number=cr)
+    if rid:
+        game_state['round_id'] = rid
+        print(f"[DB] ensure_round_id: created round_id={rid} for round {cr}")
+
+
 def _next_synthetic_ballot_id():
     game_state['_synthetic_ballot_seq'] += 1
     return game_state['_synthetic_ballot_seq']
@@ -2608,7 +2640,12 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
         if len(triple) < 3:
             socketio.emit(
                 'error',
-                {'message': 'Not enough submissions for final voting.'},
+                {
+                    'message': (
+                        'Could not build the final voting ballot (missing peer targets). '
+                        'Ensure every player has a round-3 image selection, then try again.'
+                    ),
+                },
                 room=p['socket_id'],
             )
             return
@@ -3090,14 +3127,18 @@ def _persist_image_selection_row(player, current_round: int, selected_img: dict)
     prompt_id = selected_img.get('prompt_id')
     if not prompt_id:
         return
+    if isinstance(prompt_id, (int, float)) and prompt_id < 0:
+        return
     imgs = player['images'].get(current_round, [])
     pi = selected_img.get('prompt_index', 1)
     elapsed = int(selected_img.get('prompt_sent_elapsed_seconds') or 0)
+    cond_sel = (player.get('condition') or '').strip().upper()
     sel_snap = heur_mod.snapshot_for_image_entry(
         prompt_index=pi,
         prompt_text=selected_img.get('prompt', ''),
         images_before_and_including=imgs,
         prompt_elapsed_seconds=elapsed,
+        cumulative_word_count_for_prompt_line=cond_sel in ('C_HU', 'T_HU'),
     )
     cum = heur_mod.cumulative_word_count_for_round(imgs, pi)
     idxs = [
@@ -3992,6 +4033,7 @@ def handle_restart_game():
     game_state['game_id'] = None  # This ensures a new game_id will be created on next start
     game_state['round_id'] = None
     game_state['post_survey_active'] = False
+    game_state['_synthetic_prompt_seq'] = 0
 
     # Kick ALL players including admin - remove them from the game and require them to rejoin
     players_to_remove = []
