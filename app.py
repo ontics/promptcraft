@@ -1730,6 +1730,8 @@ def handle_send_prompt(data):
         player['prompt_count'] += 1
         opc = player['prompt_count']
 
+    # Used for analytics: prompt send time vs image_generated_at gives generation latency.
+    prompt_sent_ts = time.time()
     emit(
         'prompt_sent',
         {
@@ -2133,7 +2135,7 @@ def handle_send_prompt(data):
         socketio.emit('image_generated', ig_payload, room=player['socket_id'])
 
         if not is_onboarding and db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-            submitted_at = datetime.fromtimestamp(time.time())
+            submitted_at = datetime.fromtimestamp(prompt_sent_ts)
             image_generated_at = datetime.fromtimestamp(time.time())
             wc = heur_mod.word_count(prompt)
             gid = game_state['game_id']

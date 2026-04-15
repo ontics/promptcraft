@@ -352,7 +352,8 @@ body {
 
 .main-game-layout {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    /* Slightly narrow target column so any under-target panels remain visible at 1080p with scaling */
+    grid-template-columns: 1.8fr 1fr;
     gap: 20px;
     height: 100%;
     min-height: 0; /* Allow grid to shrink */
@@ -521,7 +522,8 @@ body {
 }
 
 .target-image-container {
-    aspect-ratio: 1;
+    /* Keep target image large but avoid pushing under-target panels off-screen */
+    height: clamp(240px, 30vh, 340px);
     background: #f8f9fa;
     border: 2px solid #e0e0e0;
     border-radius: 10px;
