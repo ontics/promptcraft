@@ -521,6 +521,23 @@ body {
     box-shadow: 0 4px 12px rgba(0,0,0,0.1);
 }
 
+.image-gen-error-msg {
+    width: 100%;
+    min-height: 120px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 16px;
+    box-sizing: border-box;
+    background: #f8f9fa;
+    border: 1px dashed #adb5bd;
+    color: #495057;
+    font-size: 0.95rem;
+    line-height: 1.4;
+}
+
 .empty-conversation {
     color: #999;
     font-style: italic;

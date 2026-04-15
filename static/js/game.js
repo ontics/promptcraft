@@ -1968,25 +1968,18 @@ socket.on('character_message', (data) => {
     }
 });
 
+const IMAGE_GEN_FAIL_MSG = "That didn't work! Try a different prompt.";
+
 socket.on('image_generation_error', (data) => {
-    // Note: Error messages are now shown as character messages (speech bubbles from Bud/Spud)
-    // This handler is kept for logging/analytics purposes, but the character message is the primary UI
-    // The character message will appear via the 'character_message' event, which is more integrated
-    // into the game experience than a separate error box.
-    
-    // Log error for debugging (optional - can be removed if not needed)
     console.log('Image generation error:', data.error_type, data.message);
 
-    // Replace the last loading placeholder (hourglass) with a blank placeholder so it doesn't linger
     const conversationArea = document.getElementById('conversation-area');
     if (conversationArea) {
         const imageContainers = conversationArea.querySelectorAll('.image-container');
         if (imageContainers.length > 0) {
             const lastContainer = imageContainers[imageContainers.length - 1];
-            // Only replace if it is still showing the loading indicator
             if (lastContainer.querySelector('.image-loading')) {
-                // Insert an empty result element so layout remains consistent but shows as blank
-                lastContainer.innerHTML = '<div class="image-result error-blank"></div>';
+                lastContainer.innerHTML = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
             }
         }
     }
@@ -2027,7 +2020,7 @@ socket.on('image_generated', (data) => {
             if (imageContainers.length > 0) {
                 const lastContainer = imageContainers[imageContainers.length - 1];
                 if (lastContainer.querySelector('.image-loading')) {
-                    lastContainer.innerHTML = '<div class="image-result error-blank"></div>';
+                    lastContainer.innerHTML = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
                 }
             }
             applyOnboardingGenerateState();
@@ -2037,7 +2030,7 @@ socket.on('image_generated', (data) => {
             if (imageContainers.length > 0) {
                 const lastContainer = imageContainers[imageContainers.length - 1];
                 if (lastContainer.querySelector('.image-loading')) {
-                    let inner = '<div class="image-result error-blank"></div>';
+                    let inner = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
                     if (data.show_prompting_heuristics && Array.isArray(data.per_image_heuristic_display) && data.per_image_heuristic_display.length) {
                         const lines = data.per_image_heuristic_display.map((h) => {
                             const lab = (h.label || '').replace(/</g, '&lt;');
@@ -2369,6 +2362,11 @@ socket.on('selection_waiting', (data) => {
 function startSelectionTimer(duration, startTime) {
     const timerEl = document.getElementById('selection-timer');
     if (!timerEl) return;
+
+    if (timerEl.timerInterval) {
+        clearInterval(timerEl.timerInterval);
+        timerEl.timerInterval = null;
+    }
     
     // Use server-provided start time for synchronization, or fall back to current time
     const serverStartTime = startTime || (Date.now() / 1000);
@@ -2962,6 +2960,10 @@ function startRoundTimer(endTime) {
 
 // Handle timer updates from server
 socket.on('timer_update', (data) => {
+    // Only update the main round timer while on the game screen (avoid fighting selection / other UIs)
+    if (!screens.game || !screens.game.classList.contains('active')) {
+        return;
+    }
     const timerEl = document.getElementById('timer');
     
     if (timerEl && data.time_remaining !== undefined) {

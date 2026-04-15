@@ -1,4 +1,5 @@
 -- Run once in Supabase SQL editor (or add to your migration pipeline).
+-- Prerequisite: core tables must exist (run sql/bootstrap_core_schema.sql first on a new project).
 -- Pre-survey answers: copied from pre_survey_pending onto players when the game starts.
 
 alter table public.players
@@ -17,5 +18,8 @@ create table if not exists public.pre_survey_pending (
 
 alter table public.pre_survey_pending enable row level security;
 
--- Adjust policies to match your existing `players` / service-role pattern.
--- If the app uses the service role key only, RLS may already be bypassed.
+drop policy if exists "Allow all operations on pre_survey_pending" on public.pre_survey_pending;
+create policy "Allow all operations on pre_survey_pending" on public.pre_survey_pending
+  for all using (true) with check (true);
+
+-- Adjust policies to match your existing `players` / service-role pattern if needed.
