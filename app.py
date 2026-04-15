@@ -249,6 +249,24 @@ def get_character_for_round(player, current_round):
     return 'Bud' if is_control_group(player.get('condition')) else 'Spud'
 
 
+def game_started_aggregate_heuristic_fields(player: dict) -> dict:
+    """
+    T_NA / T_HU only: rounds 2–3 show under-target aggregate heuristics immediately (zeros)
+    before the first prompt; round 1 keeps panel hidden until the first image_generated.
+    """
+    r = int(game_state.get('current_round') or 1)
+    if r < 2 or r > 3 or not heur_mod.show_prompting_heuristics(player.get('condition')):
+        return {
+            'show_aggregate_heuristics_immediate': False,
+            'aggregate_heuristic_preview': [],
+        }
+    agg_zero = heur_mod.aggregate_snapshot_for_round(total_prompts=0, total_words=0)
+    return {
+        'show_aggregate_heuristics_immediate': True,
+        'aggregate_heuristic_preview': heur_mod.format_aggregate_for_ui(agg_zero),
+    }
+
+
 def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
     """
     Split a shuffled list into len(group_labels) segments with sizes as equal as possible;
@@ -793,13 +811,15 @@ def handle_join_game(data):
                         character_data['animation_state'] = get_spud_animation_state(prompt_count, plant_state, is_error=False, has_successful_prompt=has_successful_prompt)
                         character_data['prompt_count'] = prompt_count
                     
-                    socketio.emit('game_started', {
+                    _gs = {
                         'round': current_round,
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
                         'character': character_data,
                         'image_context_bullets': player_gets_image_context_bullets(player),
-                    }, room=player['socket_id'])
+                    }
+                    _gs.update(game_started_aggregate_heuristic_fields(player))
+                    socketio.emit('game_started', _gs, room=player['socket_id'])
                     # Restore their generated images
                     if player['images'].get(current_round):
                         for img_data in player['images'][current_round]:
@@ -1585,13 +1605,15 @@ def handle_start_game():
                     if welcome_message:
                         character_data['message'] = welcome_message
 
-                    socketio.emit('game_started', {
+                    _gs = {
                         'round': 1,
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
                         'character': character_data,
                         'image_context_bullets': player_gets_image_context_bullets(p),
-                    }, room=socket_id)
+                    }
+                    _gs.update(game_started_aggregate_heuristic_fields(p))
+                    socketio.emit('game_started', _gs, room=socket_id)
         
         # Send admin game started event with player status
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -2577,12 +2599,15 @@ def advance_to_next_prompting_round_after_selection():
             welcome_message = get_welcome_message(p, game_state['current_round'])
             if welcome_message:
                 character_data['message'] = welcome_message
-            socketio.emit('game_started', {
+            _gs = {
                 'round': game_state['current_round'],
                 'target': game_state['current_target'],
                 'end_time': game_state['round_end_time'],
                 'character': character_data,
-            }, room=sid)
+                'image_context_bullets': player_gets_image_context_bullets(p),
+            }
+            _gs.update(game_started_aggregate_heuristic_fields(p))
+            socketio.emit('game_started', _gs, room=sid)
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         cr = game_state['current_round']
         socketio.emit('admin_game_started', {
@@ -3868,13 +3893,15 @@ def handle_next_round():
                     if welcome_message:
                         character_data['message'] = welcome_message
 
-                    socketio.emit('game_started', {
+                    _gs = {
                         'round': game_state['current_round'],
                         'target': game_state['current_target'],
                         'end_time': game_state['round_end_time'],
                         'character': character_data,
                         'image_context_bullets': player_gets_image_context_bullets(p),
-                    }, room=socket_id)
+                    }
+                    _gs.update(game_started_aggregate_heuristic_fields(p))
+                    socketio.emit('game_started', _gs, room=socket_id)
         
         # Send admin game started event with player status
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -4517,13 +4544,15 @@ def next_round_console():
                             character_data['animation_state'] = 'smiling'
                             character_data['prompt_count'] = 0
 
-                        socketio.emit('game_started', {
+                        _gs = {
                             'round': game_state['current_round'],
                             'target': game_state['current_target'],
                             'end_time': game_state['round_end_time'],
                             'character': character_data,
                             'image_context_bullets': player_gets_image_context_bullets(p),
-                        }, room=socket_id)
+                        }
+                        _gs.update(game_started_aggregate_heuristic_fields(p))
+                        socketio.emit('game_started', _gs, room=socket_id)
             
             # Send admin game started event
             if admin_session_id in players and players[admin_session_id].get('socket_id'):

@@ -1591,16 +1591,20 @@ socket.on('game_started', (data) => {
     if (aggPanel) {
         aggPanel.style.display = 'none';
         aggPanel.innerHTML = '';
-    }
-    // Round 1: keep old behavior (panel appears only after first image is generated).
-    // Rounds 2–3: for treatment (T_NA/T_HU), show the panel immediately with 0 totals.
-    if (aggPanel && data.round >= 2 && showTreatmentSelectionHeuristics()) {
-        const zeroLines = [
-            { label: 'Prompts sent', value: '0' },
-            { label: 'Total words', value: '0' },
-        ];
-        aggPanel.style.display = 'block';
-        aggPanel.innerHTML = `<h4 class="aggregate-heuristics-title">Your round totals</h4>${buildHeuristicLinesHtml(zeroLines)}`;
+        aggPanel.setAttribute('aria-hidden', 'true');
+        // Round 1: panel stays hidden until first image_generated (server does not set the flag).
+        // Rounds 2–3 + T_NA/T_HU: server sends show_aggregate_heuristics_immediate + zero totals.
+        if (
+            data.show_aggregate_heuristics_immediate &&
+            Array.isArray(data.aggregate_heuristic_preview) &&
+            data.aggregate_heuristic_preview.length
+        ) {
+            aggPanel.style.display = 'block';
+            aggPanel.setAttribute('aria-hidden', 'false');
+            aggPanel.innerHTML = `<h4 class="aggregate-heuristics-title">Your round totals</h4>${buildHeuristicLinesHtml(
+                data.aggregate_heuristic_preview,
+            )}`;
+        }
     }
 
     // Set up initial avatar state based on character data from server
