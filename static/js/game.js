@@ -46,7 +46,6 @@ let gameState = {
     postSurveyCompleted: false,
     postSurveyActive: false,
     canStartPostSurvey: false,
-    pendingGameOver: null,
 };
 
 let timerInterval;
@@ -426,7 +425,7 @@ function showScreen(screenName) {
 
 function syncStartPostSurveyButton() {
     const btn = document.getElementById('start-post-survey-btn');
-    if (!btn) return; /* button removed — post-survey opens automatically after voting */
+    if (!btn) return;
     if (!gameState.isAdmin) {
         btn.disabled = true;
         return;
@@ -439,113 +438,6 @@ function syncStartPostSurveyButton() {
         : 'Open the post-game survey for everyone in this session. Requires at least one player and a started game with database records; you will see a message if it cannot run yet.';
 }
 
-const POST_SURVEY_M1_STEMS = ['longer', 'more', 'vocab'];
-const POST_SURVEY_M1_ROWS = ['creative', 'precise', 'skilled', 'efficient'];
-const POST_SURVEY_M2_KEYS = [
-    'visual_similarity',
-    'considers_prompt_count',
-    'considers_word_count',
-    'considers_vocab_variability',
-    'value_not_easily_created',
-    'few_prompts_better_understands',
-    'dozens_poor_engineering',
-];
-
-function collectPostSurveyMatrix1() {
-    const out = {};
-    for (const stem of POST_SURVEY_M1_STEMS) {
-        out[stem] = {};
-        for (const row of POST_SURVEY_M1_ROWS) {
-            const sel = document.querySelector(`input[name="post-m1-${stem}-${row}"]:checked`);
-            if (!sel) return null;
-            out[stem][row] = sel.value;
-        }
-    }
-    return out;
-}
-
-function collectPostSurveyMatrix2() {
-    const out = {};
-    for (const k of POST_SURVEY_M2_KEYS) {
-        const sel = document.querySelector(`input[name="post-m2-${k}"]:checked`);
-        if (!sel) return null;
-        out[k] = sel.value;
-    }
-    return out;
-}
-
-function isPostSurveyFormComplete() {
-    const q1 = (document.getElementById('post-free-q1')?.value || '').trim();
-    const q2 = (document.getElementById('post-free-q2')?.value || '').trim();
-    const q3 = (document.getElementById('post-free-q3')?.value || '').trim();
-    const q4 = (document.getElementById('post-free-q4')?.value || '').trim();
-    const l1 = document.querySelector('input[name="post-likert-best-work"]:checked');
-    const l2 = document.querySelector('input[name="post-likert-effort"]:checked');
-    const imp = document.querySelector('input[name="post-impressive"]:checked');
-    if (!q1 || !q2 || !q3 || !q4 || !l1 || !l2 || !imp) return false;
-    if (!collectPostSurveyMatrix1()) return false;
-    if (!collectPostSurveyMatrix2()) return false;
-    return true;
-}
-
-function renderGameOverContent(data) {
-    if (gameState.isAdmin) return;
-    const hintGo = document.getElementById('gameover-post-survey-hint');
-    if (hintGo) hintGo.style.display = 'none';
-    const backBtnGo = document.getElementById('back-to-home-btn');
-    if (backBtnGo) backBtnGo.style.display = '';
-
-    const finalResults = document.getElementById('final-results');
-    if (!finalResults || !data) return;
-
-    if (data.experiment) {
-        finalResults.innerHTML = '<h2>Game results</h2>';
-        (data.results || []).forEach((result) => {
-            const item = document.createElement('div');
-            item.className = 'final-result-item experiment-rank';
-            const r = result.rank || 1;
-            let badge = String(r);
-            if (r === 1) badge = '🥇';
-            else if (r === 2) badge = '🥈';
-            else if (r === 3) badge = '🥉';
-            item.innerHTML = `
-                <div class="result-rank">${badge}</div>
-                <div class="result-info"><h3>${result.player_name}</h3></div>
-            `;
-            finalResults.appendChild(item);
-        });
-        return;
-    }
-
-    finalResults.innerHTML = '<h2>Final Standings</h2>';
-
-    (data.results || []).forEach((result, index) => {
-        const item = document.createElement('div');
-        item.className = 'final-result-item';
-
-        if (index === 0) item.classList.add('podium-1');
-        else if (index === 1) item.classList.add('podium-2');
-        else if (index === 2) item.classList.add('podium-3');
-
-        let rankEmoji = '';
-        if (index === 0) rankEmoji = '🥇';
-        else if (index === 1) rankEmoji = '🥈';
-        else if (index === 2) rankEmoji = '🥉';
-        else rankEmoji = `#${index + 1}`;
-
-        item.innerHTML = `
-            <div class="result-rank">${rankEmoji}</div>
-            <div class="result-info">
-                <h3>${result.player_name}</h3>
-                <p>Round Scores: ${(result.round_scores || []).join(', ')}</p>
-            </div>
-            <div class="result-score">${result.total_score}</div>
-        `;
-
-        finalResults.appendChild(item);
-    });
-}
-
 function resetPostGameSurveyForm() {
     for (let i = 1; i <= 4; i++) {
         const el = document.getElementById(`post-free-q${i}`);
@@ -554,10 +446,6 @@ function resetPostGameSurveyForm() {
             el.disabled = false;
         }
     }
-    document.querySelectorAll('#post-game-survey-form-wrap input[type="radio"]').forEach((r) => {
-        r.checked = false;
-        r.disabled = false;
-    });
     document.querySelectorAll('input[name="post-likert-best-work"]').forEach((r) => {
         r.checked = false;
         r.disabled = false;
@@ -586,7 +474,13 @@ function resetPostGameSurveyForm() {
 function updatePostGameSurveySubmitEnabled() {
     const submit = document.getElementById('post-game-survey-submit-btn');
     if (!submit || submit.dataset.submitted === '1') return;
-    submit.disabled = !isPostSurveyFormComplete();
+    const q1 = (document.getElementById('post-free-q1')?.value || '').trim();
+    const q2 = (document.getElementById('post-free-q2')?.value || '').trim();
+    const q3 = (document.getElementById('post-free-q3')?.value || '').trim();
+    const q4 = (document.getElementById('post-free-q4')?.value || '').trim();
+    const l1 = document.querySelector('input[name="post-likert-best-work"]:checked');
+    const l2 = document.querySelector('input[name="post-likert-effort"]:checked');
+    submit.disabled = !(q1 && q2 && q3 && q4 && l1 && l2);
 }
 
 function initPostGameSurveyListeners() {
@@ -595,11 +489,6 @@ function initPostGameSurveyListeners() {
     }
     document.querySelectorAll('input[name="post-likert-best-work"], input[name="post-likert-effort"]').forEach((el) => {
         el.addEventListener('change', updatePostGameSurveySubmitEnabled);
-    });
-    document.getElementById('post-game-survey-form-wrap')?.addEventListener('change', (e) => {
-        if (e.target && e.target.matches && e.target.matches('input[type="radio"]')) {
-            updatePostGameSurveySubmitEnabled();
-        }
     });
     document.getElementById('post-game-survey-submit-btn')?.addEventListener('click', () => {
         const err = document.getElementById('post-game-survey-error');
@@ -613,10 +502,7 @@ function initPostGameSurveyListeners() {
         const free_q4 = (document.getElementById('post-free-q4')?.value || '').trim();
         const likert_best_work = document.querySelector('input[name="post-likert-best-work"]:checked')?.value;
         const likert_effort = document.querySelector('input[name="post-likert-effort"]:checked')?.value;
-        const impressive_if = document.querySelector('input[name="post-impressive"]:checked')?.value;
-        const matrix1 = collectPostSurveyMatrix1();
-        const matrix2 = collectPostSurveyMatrix2();
-        if (!isPostSurveyFormComplete() || !matrix1 || !matrix2 || !impressive_if) {
+        if (!free_q1 || !free_q2 || !free_q3 || !free_q4 || !likert_best_work || !likert_effort) {
             if (err) {
                 err.textContent = 'Please answer every question before submitting.';
                 err.style.display = 'block';
@@ -630,13 +516,16 @@ function initPostGameSurveyListeners() {
             free_q4,
             likert_best_work,
             likert_effort,
-            matrix1,
-            matrix2,
-            impressive_if,
         });
     });
     document.getElementById('post-game-survey-back-btn')?.addEventListener('click', () => {
         socket.emit('back_to_home');
+    });
+    document.getElementById('start-post-survey-btn')?.addEventListener('click', () => {
+        if (!gameState.isAdmin) return;
+        if (gameState.postSurveyActive) return;
+        if (!confirm('Open the post-game survey for all connected players now?')) return;
+        socket.emit('admin_start_post_survey');
     });
 }
 
@@ -845,10 +734,7 @@ socket.on('game_joined', (data) => {
 
         showLobbySurveyForPlayer();
 
-        if (!gameState.isAdmin && data.player && data.player.post_survey_game_over) {
-            renderGameOverContent(data.player.post_survey_game_over);
-            showScreen('gameover');
-        } else if (!gameState.isAdmin && gameState.postSurveyActive && !gameState.postSurveyCompleted) {
+        if (!gameState.isAdmin && gameState.postSurveyActive && !gameState.postSurveyCompleted) {
             resetPostGameSurveyForm();
             showScreen('postGameSurvey');
         }
@@ -1042,12 +928,9 @@ socket.on('player_status_update', (data) => {
     }
 });
 
-socket.on('post_survey_started', (data) => {
+socket.on('post_survey_started', () => {
     if (gameState.isAdmin) return;
     gameState.postSurveyActive = true;
-    if (data && data.game_over) {
-        gameState.pendingGameOver = data.game_over;
-    }
     if (gameState.postSurveyCompleted) return;
     const hintGo = document.getElementById('gameover-post-survey-hint');
     if (hintGo) hintGo.style.display = 'none';
@@ -1057,24 +940,17 @@ socket.on('post_survey_started', (data) => {
     showScreen('postGameSurvey');
 });
 
-socket.on('post_game_survey_saved', (data) => {
+socket.on('post_game_survey_saved', () => {
     if (gameState.isAdmin) return;
     gameState.postSurveyCompleted = true;
-    gameState.pendingGameOver = null;
+    const wrap = document.getElementById('post-game-survey-form-wrap');
+    const done = document.getElementById('post-game-survey-done');
+    if (wrap) wrap.style.display = 'none';
+    if (done) done.style.display = 'block';
     const submit = document.getElementById('post-game-survey-submit-btn');
     if (submit) {
         submit.dataset.submitted = '1';
         submit.disabled = true;
-    }
-    const payload = data && data.game_over;
-    if (payload) {
-        renderGameOverContent(payload);
-        showScreen('gameover');
-    } else {
-        const wrap = document.getElementById('post-game-survey-form-wrap');
-        const done = document.getElementById('post-game-survey-done');
-        if (wrap) wrap.style.display = 'none';
-        if (done) done.style.display = 'block';
     }
 });
 
@@ -2782,7 +2658,53 @@ socket.on('game_over', (data) => {
     const backBtnGo = document.getElementById('back-to-home-btn');
     if (backBtnGo) backBtnGo.style.display = '';
 
-    renderGameOverContent(data);
+    const finalResults = document.getElementById('final-results');
+    if (data.experiment) {
+        finalResults.innerHTML = '<h2>Game results</h2>';
+        (data.results || []).forEach((result) => {
+            const item = document.createElement('div');
+            item.className = 'final-result-item experiment-rank';
+            const r = result.rank || 1;
+            let badge = String(r);
+            if (r === 1) badge = '🥇';
+            else if (r === 2) badge = '🥈';
+            else if (r === 3) badge = '🥉';
+            item.innerHTML = `
+                <div class="result-rank">${badge}</div>
+                <div class="result-info"><h3>${result.player_name}</h3></div>
+            `;
+            finalResults.appendChild(item);
+        });
+        return;
+    }
+
+    finalResults.innerHTML = '<h2>Final Standings</h2>';
+
+    data.results.forEach((result, index) => {
+        const item = document.createElement('div');
+        item.className = 'final-result-item';
+
+        if (index === 0) item.classList.add('podium-1');
+        else if (index === 1) item.classList.add('podium-2');
+        else if (index === 2) item.classList.add('podium-3');
+
+        let rankEmoji = '';
+        if (index === 0) rankEmoji = '🥇';
+        else if (index === 1) rankEmoji = '🥈';
+        else if (index === 2) rankEmoji = '🥉';
+        else rankEmoji = `#${index + 1}`;
+
+        item.innerHTML = `
+            <div class="result-rank">${rankEmoji}</div>
+            <div class="result-info">
+                <h3>${result.player_name}</h3>
+                <p>Round Scores: ${result.round_scores.join(', ')}</p>
+            </div>
+            <div class="result-score">${result.total_score}</div>
+        `;
+
+        finalResults.appendChild(item);
+    });
 });
 
 socket.on('game_restarted', (data) => {
@@ -2798,11 +2720,10 @@ socket.on('game_restarted', (data) => {
     gameState.selectedImageIndex = null;
     gameState.generatedImages = [];
     gameState.votedFor = null;
-        gameState.postSurveyActive = false;
-        gameState.postSurveyCompleted = false;
-        gameState.canStartPostSurvey = false;
-        gameState.pendingGameOver = null;
-        syncStartPostSurveyButton();
+    gameState.postSurveyActive = false;
+    gameState.postSurveyCompleted = false;
+    gameState.canStartPostSurvey = false;
+    syncStartPostSurveyButton();
         
         // Show message if provided
         if (data && data.message) {
@@ -2819,7 +2740,6 @@ socket.on('game_restarted_kick', (data) => {
     gameState.postSurveyActive = false;
     gameState.postSurveyCompleted = false;
     gameState.canStartPostSurvey = false;
-    gameState.pendingGameOver = null;
     delete document.getElementById('post-game-survey-submit-btn')?.dataset?.submitted;
     resetPostGameSurveyForm();
     gameState.imageContextBulletsEnabled = false;

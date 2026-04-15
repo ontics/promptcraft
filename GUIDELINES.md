@@ -44,7 +44,6 @@ This document is for **developers and AI assistants** (Cursor, Claude Code, etc.
 
 ## 5. Using the AI for merges and PRs
 
-- **AI must use GitHub PRs for `v2`**: When you ask the AI to put work on `v2` (e.g. “push to v2”, “LGTM, merge”), it should **commit on a feature branch**, **push that branch**, and give you the **Compare / Create PR** link (`…/compare/v2…<feature-branch>?expand=1`) or run `gh pr create --base v2`. It must **not** merge into local `v2` and `git push origin v2` unless you explicitly want a direct push without review.
 - **Before pushing**: You can paste `git diff` (or the changed files) into the AI and ask: “Review this diff for the [feature name] branch — does it look correct and did I miss any call sites or related logic?” This helps catch obvious mistakes before the PR.
 - **When you have merge conflicts**: Open the conflicted file(s). You’ll see `<<<<<<<`, `=======`, `>>>>>>>`. Paste the conflicted section(s) into the AI and say: “Resolve this merge conflict. Our branch did [X], the other branch did [Y]. We need both behaviors.” Then apply the suggested resolution and remove the conflict markers.
 - **Don’t merge v2 into main** until the team has agreed that v2 is ready; say so in PRs and in the demo so everyone remembers.
@@ -68,4 +67,4 @@ User stories are organized by interface area (Lobby, Prompting, Selection, Votin
 
 ---
 
-**Summary for the AI**: When editing PromptCraft, prefer minimal changes that match the user story; preserve behavior elsewhere; and assume multiple developers may be editing the same few files (index.html, game.js, app.py) — resolve conflicts by combining both sides’ intent where possible. Always refer to this file when unsure about branch strategy, testing, or merge process. **Integrate into `v2` only via a pull request** (push feature branch + PR link), not by merging locally and pushing `v2`, unless the user explicitly requests that.
+**Summary for the AI**: When editing PromptCraft, prefer minimal changes that match the user story; preserve behavior elsewhere; and assume multiple developers may be editing the same few files (index.html, game.js, app.py) — resolve conflicts by combining both sides’ intent where possible. Always refer to this file when unsure about branch strategy, testing, or merge process.
