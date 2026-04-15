@@ -9,6 +9,49 @@ function playerCondition(p) {
     return p.condition != null && p.condition !== '' ? p.condition : (p.team || '');
 }
 
+/** Treatment arms: show heuristics under images on the selection screen (matches server T_NA / T_HU). */
+function showTreatmentSelectionHeuristics() {
+    const c = String(gameState.playerCondition || '').toUpperCase();
+    return c === 'T_NA' || c === 'T_HU';
+}
+
+function buildHeuristicLinesHtml(lines) {
+    if (!Array.isArray(lines) || !lines.length) return '';
+    return lines.map((h) => {
+        const lab = (h.label || '').replace(/</g, '&lt;');
+        const val = (h.value || '').replace(/</g, '&lt;');
+        return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
+    }).join('');
+}
+
+function findConversationImageContainer(conversationArea, promptIndex) {
+    if (!conversationArea || promptIndex == null || promptIndex === undefined) return null;
+    const item = conversationArea.querySelector(`.conversation-item[data-prompt-index="${promptIndex}"]`);
+    return item ? item.querySelector('.image-container') : null;
+}
+
+/** If prompt_index is missing (old server), fall back to the newest row that still shows loading. */
+function findConversationImageContainerFallback(conversationArea) {
+    if (!conversationArea) return null;
+    const containers = conversationArea.querySelectorAll('.image-container');
+    for (let i = containers.length - 1; i >= 0; i--) {
+        if (containers[i].querySelector('.image-loading')) return containers[i];
+    }
+    return containers.length ? containers[containers.length - 1] : null;
+}
+
+/** Map index in gameState.generatedImages to index among .selection-item (valid images only). */
+function generatedIndexToGalleryItemIndex(genIdx) {
+    let g = 0;
+    for (let i = 0; i <= genIdx && i < gameState.generatedImages.length; i++) {
+        if (!gameState.generatedImages[i].error_type) {
+            if (i === genIdx) return g;
+            g++;
+        }
+    }
+    return -1;
+}
+
 // Game state
 let gameState = {
     playerName: '',
@@ -591,9 +634,10 @@ document.getElementById('confirm-selection-btn').addEventListener('click', () =>
         gameState.hasConfirmedSelection = true;
         // Send prompt_id instead of image_index to avoid index mismatch (client filters errors, server doesn't)
         const selectedImage = gameState.generatedImages[gameState.selectedImageIndex];
-        socket.emit('select_image', { 
+        socket.emit('select_image', {
             prompt_id: selectedImage.prompt_id,
-            image_index: gameState.selectedImageIndex  // Keep for backward compatibility/validation
+            prompt_index: selectedImage.prompt_index,
+            image_index: gameState.selectedImageIndex,
         });
         
         // Change button appearance to show it's been confirmed
@@ -640,12 +684,13 @@ socket.on('image_selected', (data) => {
                 const gallery = document.getElementById('selection-gallery');
                 if (gallery) {
                     const items = gallery.querySelectorAll('.selection-item');
-                    items.forEach((item, idx) => {
-                        item.classList.remove('selected');
-                        if (idx === lastValidIndex) {
-                            item.classList.add('selected');
-                        }
-                    });
+                    const gi = generatedIndexToGalleryItemIndex(lastValidIndex);
+                    items.forEach((item) => item.classList.remove('selected'));
+                    if (gi >= 0 && items[gi]) {
+                        items[gi].classList.add('selected');
+                    } else if (items.length) {
+                        items[items.length - 1].classList.add('selected');
+                    }
                 }
             }
         }
@@ -1872,6 +1917,12 @@ socket.on('prompt_sent', (data) => {
     // Create conversation item
     const item = document.createElement('div');
     item.className = 'conversation-item';
+    if (data.prompt_index != null) {
+        item.dataset.promptIndex = String(data.prompt_index);
+    }
+    if (data.onboarding) {
+        item.dataset.onboarding = '1';
+    }
     item.innerHTML = `
         <div class="prompt-bubble">${data.prompt}</div>
         <div class="image-container">
@@ -1888,44 +1939,40 @@ socket.on('image_generated', (data) => {
         gameState.onboardingPromptCount = (gameState.onboardingPromptCount || 0) + 1;
     }
 
+    const conversationArea = document.getElementById('conversation-area');
+    /** errorPath: prefer a row that still shows loading. Success: fill the row for this prompt_index. */
+    const resolveConversationSlot = (errorPath) => {
+        if (!conversationArea) return null;
+        const byIndex = findConversationImageContainer(conversationArea, data.prompt_index);
+        if (byIndex) {
+            if (!errorPath) return byIndex;
+            if (byIndex.querySelector('.image-loading')) return byIndex;
+        }
+        return findConversationImageContainerFallback(conversationArea);
+    };
+
     // Skip error images - don't add them to generatedImages or selection gallery
     if (data.error_type) {
         if (data.onboarding) {
-            const conversationArea = document.getElementById('conversation-area');
-            const imageContainers = conversationArea ? conversationArea.querySelectorAll('.image-container') : [];
-            if (imageContainers.length > 0) {
-                const lastContainer = imageContainers[imageContainers.length - 1];
-                if (lastContainer.querySelector('.image-loading')) {
-                    lastContainer.innerHTML = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
-                }
+            const slot = resolveConversationSlot(true);
+            if (slot && slot.querySelector('.image-loading')) {
+                slot.innerHTML = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
             }
             applyOnboardingGenerateState();
         } else {
-            const conversationArea = document.getElementById('conversation-area');
-            const imageContainers = conversationArea ? conversationArea.querySelectorAll('.image-container') : [];
-            if (imageContainers.length > 0) {
-                const lastContainer = imageContainers[imageContainers.length - 1];
-                if (lastContainer.querySelector('.image-loading')) {
-                    let inner = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
-                    if (data.show_prompting_heuristics && Array.isArray(data.per_image_heuristic_display) && data.per_image_heuristic_display.length) {
-                        const lines = data.per_image_heuristic_display.map((h) => {
-                            const lab = (h.label || '').replace(/</g, '&lt;');
-                            const val = (h.value || '').replace(/</g, '&lt;');
-                            return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
-                        }).join('');
-                        inner = `<div class="gen-img-row"><div class="gen-img-cell">${inner}</div><div class="heuristic-box">${lines}</div></div>`;
-                    }
-                    lastContainer.innerHTML = inner;
+            const slot = resolveConversationSlot(true);
+            if (slot && slot.querySelector('.image-loading')) {
+                let inner = `<div class="image-gen-error-msg" role="alert">${IMAGE_GEN_FAIL_MSG}</div>`;
+                if (data.show_prompting_heuristics && Array.isArray(data.per_image_heuristic_display) && data.per_image_heuristic_display.length) {
+                    const lines = buildHeuristicLinesHtml(data.per_image_heuristic_display);
+                    inner = `<div class="gen-img-row"><div class="gen-img-cell">${inner}</div><div class="heuristic-box">${lines}</div></div>`;
                 }
+                slot.innerHTML = inner;
             }
             const aggPanelErr = document.getElementById('aggregate-heuristics-panel');
             if (aggPanelErr && data.show_prompting_heuristics && Array.isArray(data.aggregate_heuristic_display) && data.aggregate_heuristic_display.length) {
                 aggPanelErr.style.display = 'block';
-                const lines = data.aggregate_heuristic_display.map((h) => {
-                    const lab = (h.label || '').replace(/</g, '&lt;');
-                    const val = (h.value || '').replace(/</g, '&lt;');
-                    return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
-                }).join('');
+                const lines = buildHeuristicLinesHtml(data.aggregate_heuristic_display);
                 aggPanelErr.innerHTML = `<h4 class="aggregate-heuristics-title">Your round totals</h4>${lines}`;
             }
             if (conversationArea) {
@@ -1934,87 +1981,73 @@ socket.on('image_generated', (data) => {
         }
         return;
     }
-    
+
     gameState.generatedImages.push(data);
 
-    // Find the last loading image and replace with actual image
-    const conversationArea = document.getElementById('conversation-area');
-    const imageContainers = conversationArea.querySelectorAll('.image-container');
-    
-    if (imageContainers.length > 0) {
-        const lastContainer = imageContainers[imageContainers.length - 1];
+    const slot = resolveConversationSlot(false);
+    if (slot) {
         const imageSrc = data.image_url || data.image_data || '';
-        let imgHtml = `<img src="${imageSrc}" alt="Generated image" class="image-result">`;
+        const pidAttr =
+            data.prompt_id != null && data.prompt_id !== ''
+                ? ` data-prompt-id="${String(data.prompt_id).replace(/"/g, '&quot;')}"`
+                : '';
+        const pidxAttr =
+            data.prompt_index != null ? ` data-prompt-index="${String(data.prompt_index)}"` : '';
+        let imgHtml = `<img src="${imageSrc}" alt="Generated image" class="image-result"${pidAttr}${pidxAttr}>`;
         if (data.show_prompting_heuristics && Array.isArray(data.per_image_heuristic_display) && data.per_image_heuristic_display.length) {
-            const lines = data.per_image_heuristic_display.map((h) => {
-                const lab = (h.label || '').replace(/</g, '&lt;');
-                const val = (h.value || '').replace(/</g, '&lt;');
-                return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
-            }).join('');
+            const lines = buildHeuristicLinesHtml(data.per_image_heuristic_display);
             imgHtml = `<div class="gen-img-row"><div class="gen-img-cell">${imgHtml}</div><div class="heuristic-box">${lines}</div></div>`;
         }
-        lastContainer.innerHTML = imgHtml;
+        slot.innerHTML = imgHtml;
     }
 
     const aggPanel = document.getElementById('aggregate-heuristics-panel');
     if (aggPanel) {
         if (data.show_prompting_heuristics && Array.isArray(data.aggregate_heuristic_display) && data.aggregate_heuristic_display.length) {
             aggPanel.style.display = 'block';
-            const lines = data.aggregate_heuristic_display.map((h) => {
-                const lab = (h.label || '').replace(/</g, '&lt;');
-                const val = (h.value || '').replace(/</g, '&lt;');
-                return `<div class="heuristic-line"><span class="hl">${lab}</span>: <span class="hv">${val}</span></div>`;
-            }).join('');
+            const lines = buildHeuristicLinesHtml(data.aggregate_heuristic_display);
             aggPanel.innerHTML = `<h4 class="aggregate-heuristics-title">Your round totals</h4>${lines}`;
         } else {
             aggPanel.style.display = 'none';
             aggPanel.innerHTML = '';
         }
     }
-    
-    // Note: Error messages are handled separately via 'image_generation_error' event
-    
-    // Scroll to bottom
+
     if (conversationArea) {
-    conversationArea.scrollTop = conversationArea.scrollHeight;
+        conversationArea.scrollTop = conversationArea.scrollHeight;
     }
 
     if (data.onboarding) {
         applyOnboardingGenerateState();
     }
-    
-    // If we're in selection phase (either selection screen is active OR we've received voting_started),
-    // add this image to the gallery. This ensures late-arriving images appear even if they arrive
-    // during transition or after voting_started has populated the gallery.
+
     const selectionScreen = document.getElementById('selection-screen');
     const isSelectionScreenActive = selectionScreen && selectionScreen.classList.contains('active');
-    
+
     if (gameState.inSelectionPhase || isSelectionScreenActive) {
-        // Only add valid (non-error) images to selection gallery
         const validImageIndex = gameState.generatedImages.length - 1;
-        
-        // Add to gallery if selection screen exists (might be in transition)
+
         if (selectionScreen) {
             addImageToSelectionGallery(data, validImageIndex);
         }
-        
-        // If the player hasn't confirmed a selection yet, shift default to the newest valid image
+
         if (!gameState.hasConfirmedSelection && isSelectionScreenActive) {
             gameState.selectedImageIndex = validImageIndex;
 
-            // Visual feedback - move the green border to the newest image in the gallery
-            // The gallery only contains valid images, so we need to find the last item
             const gallery = document.getElementById('selection-gallery');
             if (gallery) {
                 const items = gallery.querySelectorAll('.selection-item');
                 if (items.length > 0) {
-                    // Select the last item in the gallery (which is the newest valid image)
-                    items.forEach(i => i.classList.remove('selected'));
-                    items[items.length - 1].classList.add('selected');
+                    const gi = generatedIndexToGalleryItemIndex(validImageIndex);
+                    items.forEach((i) => i.classList.remove('selected'));
+                    if (gi >= 0 && items[gi]) {
+                        items[gi].classList.add('selected');
+                    } else {
+                        items[items.length - 1].classList.add('selected');
+                    }
                 }
             }
-            
-            // Show default selection notice
+
             const defaultNotice = document.getElementById('default-selection-notice');
             if (defaultNotice) {
                 defaultNotice.style.display = 'block';
@@ -2026,22 +2059,22 @@ socket.on('image_generated', (data) => {
 function addImageToSelectionGallery(imgData, index) {
     const gallery = document.getElementById('selection-gallery');
     if (!gallery) return;
-    
-    // Check if image already exists in gallery by prompt_id (more reliable than index)
-    // If no prompt_id, check by comparing with existing items
+
     const existingItems = gallery.querySelectorAll('.selection-item');
     if (imgData.prompt_id) {
-        // Check if an item with this prompt_id already exists
         for (let i = 0; i < existingItems.length; i++) {
-            const item = existingItems[i];
-            const itemImg = item.querySelector('img');
-            if (itemImg && itemImg.dataset.promptId === imgData.prompt_id) {
-                return; // Already added
+            const itemImg = existingItems[i].querySelector('img');
+            if (itemImg && itemImg.dataset.promptId === String(imgData.prompt_id)) {
+                return;
+            }
+        }
+    } else if (imgData.prompt_index != null) {
+        for (let i = 0; i < existingItems.length; i++) {
+            if (existingItems[i].dataset.promptIndex === String(imgData.prompt_index)) {
+                return;
             }
         }
     } else {
-        // Fallback: check if we've already added this many items (less reliable but works for backward compatibility)
-        // Count valid images up to this index to see if gallery should already have this item
         let validImageCount = 0;
         for (let i = 0; i < index && i < gameState.generatedImages.length; i++) {
             if (!gameState.generatedImages[i].error_type) {
@@ -2049,77 +2082,115 @@ function addImageToSelectionGallery(imgData, index) {
             }
         }
         if (existingItems.length > validImageCount) {
-            return; // Already added (or more items exist than expected)
+            return;
         }
     }
-    
-        const item = document.createElement('div');
-        item.className = 'selection-item';
-        // Prefer image_url over image_data to reduce memory usage
-        const imageSrc = imgData.image_url || imgData.image_data || '';
-        item.innerHTML = `
-            <img src="${imageSrc}" alt="Generated image" ${imgData.prompt_id ? `data-prompt-id="${imgData.prompt_id}"` : ''}>
+
+    const item = document.createElement('div');
+    item.className = 'selection-item';
+    if (imgData.prompt_index != null) {
+        item.dataset.promptIndex = String(imgData.prompt_index);
+    }
+    const imageSrc = imgData.image_url || imgData.image_data || '';
+    const pidAttr =
+        imgData.prompt_id != null && imgData.prompt_id !== ''
+            ? ` data-prompt-id="${String(imgData.prompt_id).replace(/"/g, '&quot;')}"`
+            : '';
+    const pidxAttr =
+        imgData.prompt_index != null ? ` data-prompt-index="${String(imgData.prompt_index)}"` : '';
+
+    let heurBelow = '';
+    if (
+        showTreatmentSelectionHeuristics() &&
+        Array.isArray(imgData.per_image_heuristic_display) &&
+        imgData.per_image_heuristic_display.length
+    ) {
+        heurBelow = `<div class="selection-heuristics-below heuristic-box">${buildHeuristicLinesHtml(
+            imgData.per_image_heuristic_display,
+        )}</div>`;
+    }
+
+    item.innerHTML = `
+            <img src="${imageSrc}" alt="Generated image" class="selection-gallery-img"${pidAttr}${pidxAttr}>
+            ${heurBelow}
             <div class="image-context-bullets gameplay-image-context-bullets" aria-hidden="true">
                 <ul class="image-context-bullets-list"></ul>
             </div>
         `;
 
-        item.addEventListener('click', () => {
-            // Deselect all
-            document.querySelectorAll('.selection-item').forEach(i => i.classList.remove('selected'));
-            // Select this
-            item.classList.add('selected');
-            gameState.selectedImageIndex = index;
+    item.addEventListener('click', () => {
+        document.querySelectorAll('.selection-item').forEach((i) => i.classList.remove('selected'));
+        item.classList.add('selected');
+        gameState.selectedImageIndex = index;
         const confirmBtn = document.getElementById('confirm-selection-btn');
         if (confirmBtn) {
             confirmBtn.disabled = false;
         }
-        // Hide default selection notice
         const defaultNotice = document.getElementById('default-selection-notice');
         if (defaultNotice) {
             defaultNotice.style.display = 'none';
         }
-        });
+    });
 
-        gallery.appendChild(item);
-        syncImageContextBulletsVisibility();
+    gallery.appendChild(item);
+    syncImageContextBulletsVisibility();
 }
 
 socket.on('image_url_updated', (data) => {
     // Update image URL in client-side array when upload completes
     // This allows selection screen to use URLs instead of base64
     if (data.prompt_id && data.image_url) {
-        const imageIndex = gameState.generatedImages.findIndex(img => img.prompt_id === data.prompt_id);
+        const imageIndex = gameState.generatedImages.findIndex((img) => img.prompt_id === data.prompt_id);
         if (imageIndex !== -1) {
             gameState.generatedImages[imageIndex].image_url = data.image_url;
-            // Optionally clear base64 from client-side array to free memory
             if (gameState.generatedImages[imageIndex].image_data) {
                 delete gameState.generatedImages[imageIndex].image_data;
             }
-            
-            // Update the image in the selection gallery if it exists
-            const gallery = document.getElementById('selection-gallery');
-            if (gallery) {
-                const items = gallery.querySelectorAll('.selection-item');
-                if (items[imageIndex]) {
-                    const img = items[imageIndex].querySelector('img');
-                    if (img) {
-                        img.src = data.image_url;
-                    }
-                }
+        }
+
+        const pid = String(data.prompt_id);
+        const gallery = document.getElementById('selection-gallery');
+        if (gallery) {
+            const img = gallery.querySelector(`img[data-prompt-id="${pid}"]`);
+            if (img) {
+                img.src = data.image_url;
             }
-            
-            // Update the image in the conversation area if it exists
-            const conversationArea = document.getElementById('conversation-area');
-            if (conversationArea) {
-                const imageContainers = conversationArea.querySelectorAll('.image-container');
-                if (imageContainers[imageIndex]) {
-                    const img = imageContainers[imageIndex].querySelector('img');
-                    if (img) {
-                        img.src = data.image_url;
-                    }
-                }
+        }
+
+        const conversationArea = document.getElementById('conversation-area');
+        if (conversationArea) {
+            const imgC = conversationArea.querySelector(`img.image-result[data-prompt-id="${pid}"]`);
+            if (imgC) {
+                imgC.src = data.image_url;
             }
+        }
+    }
+});
+
+socket.on('image_prompt_binding', (data) => {
+    const { prompt_index, prompt_id } = data;
+    if (prompt_index == null || prompt_id == null) return;
+    const pidStr = String(prompt_id);
+    for (let i = 0; i < gameState.generatedImages.length; i++) {
+        const im = gameState.generatedImages[i];
+        if (String(im.prompt_index) === String(prompt_index)) {
+            im.prompt_id = prompt_id;
+            break;
+        }
+    }
+    const gallery = document.getElementById('selection-gallery');
+    if (gallery) {
+        const item = gallery.querySelector(`.selection-item[data-prompt-index="${prompt_index}"]`);
+        const img = item ? item.querySelector('img') : gallery.querySelector(`img[data-prompt-index="${prompt_index}"]`);
+        if (img) {
+            img.dataset.promptId = pidStr;
+        }
+    }
+    const conversationArea = document.getElementById('conversation-area');
+    if (conversationArea) {
+        const img2 = conversationArea.querySelector(`img[data-prompt-index="${prompt_index}"]`);
+        if (img2) {
+            img2.dataset.promptId = pidStr;
         }
     }
 });
@@ -2202,17 +2273,21 @@ socket.on('voting_started', (data) => {
         
         if (lastValidIndex >= 0) {
             gameState.selectedImageIndex = lastValidIndex;
-            const lastItem = gallery?.querySelectorAll('.selection-item')[lastValidIndex];
-            if (lastItem) {
-                lastItem.classList.add('selected');
+            const items = gallery ? gallery.querySelectorAll('.selection-item') : [];
+            const gi = generatedIndexToGalleryItemIndex(lastValidIndex);
+            items.forEach((el) => el.classList.remove('selected'));
+            if (gi >= 0 && items[gi]) {
+                items[gi].classList.add('selected');
+            } else if (items.length) {
+                items[items.length - 1].classList.add('selected');
             }
         } else {
-            // Fallback: use last image even if it has an error (shouldn't happen)
             const lastIndex = gameState.generatedImages.length - 1;
             gameState.selectedImageIndex = lastIndex;
-            const lastItem = gallery?.querySelectorAll('.selection-item')[lastIndex];
-            if (lastItem) {
-                lastItem.classList.add('selected');
+            const items = gallery ? gallery.querySelectorAll('.selection-item') : [];
+            items.forEach((el) => el.classList.remove('selected'));
+            if (items.length) {
+                items[items.length - 1].classList.add('selected');
             }
         }
         if (confirmBtn) {
@@ -2338,14 +2413,15 @@ function startSelectionTimer(duration, startTime) {
                 
                 // Notify server of auto-selection (send prompt_id to avoid index mismatch)
                 const autoSelectedImage = gameState.generatedImages[effectiveIndex];
-                if (autoSelectedImage && autoSelectedImage.prompt_id) {
-                    socket.emit('select_image', { 
+                if (autoSelectedImage && (autoSelectedImage.prompt_id || autoSelectedImage.prompt_index != null)) {
+                    socket.emit('select_image', {
                         prompt_id: autoSelectedImage.prompt_id,
-                        image_index: effectiveIndex  // Keep for backward compatibility
+                        prompt_index: autoSelectedImage.prompt_index,
+                        image_index: effectiveIndex,
                     });
                     console.log('[CLIENT] Timer expired - auto-selected image (clicked or last valid)');
                 } else {
-                    console.error('[CLIENT] Timer expired but cannot auto-select - no valid image with prompt_id');
+                    console.error('[CLIENT] Timer expired but cannot auto-select - no valid image reference');
                 }
             }
             

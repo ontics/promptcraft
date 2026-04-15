@@ -750,12 +750,14 @@ def handle_join_game(data):
                         }, room=player['socket_id'])
                         for img_data in player.get('onboarding_images', []):
                             image_url = img_data.get('image_url')
+                            _ob_idx = player['onboarding_images'].index(img_data)
                             socketio.emit('image_generated', {
                                 'image_data': img_data.get('image_data', '') if not image_url else '',
                                 'image_url': image_url,
                                 'ai_response': img_data.get('ai_response', ''),
                                 'prompt': img_data.get('prompt', ''),
-                                'image_index': player['onboarding_images'].index(img_data),
+                                'image_index': _ob_idx,
+                                'prompt_index': img_data.get('prompt_index') or (_ob_idx + 1),
                                 'prompt_id': img_data.get('prompt_id'),
                                 'error_type': img_data.get('error_type'),
                                 'file_size_kb': img_data.get('file_size_kb'),
@@ -799,15 +801,22 @@ def handle_join_game(data):
                                 except Exception as e:
                                     print(f"[RECONNECT] Could not fetch image_url from database for prompt_id {img_data.get('prompt_id')}: {e}")
                             
+                            _snap_r = img_data.get('heuristic_snapshot')
                             socketio.emit('image_generated', {
                                 'image_data': img_data.get('image_data', '') if not image_url else '',  # Only send base64 if no URL
                                 'image_url': image_url,  # Prefer URL over base64
                                 'ai_response': img_data.get('ai_response', ''),
                                 'prompt': img_data.get('prompt', ''),
                                 'image_index': player['images'][current_round].index(img_data),
+                                'prompt_index': img_data.get('prompt_index'),
                                 'prompt_id': img_data.get('prompt_id'),
                                 'error_type': img_data.get('error_type'),  # Include error info for filtering
-                                'file_size_kb': img_data.get('file_size_kb')
+                                'file_size_kb': img_data.get('file_size_kb'),
+                                'show_prompting_heuristics': heur_mod.show_prompting_heuristics(player.get('condition')),
+                                'per_image_heuristic_display': (
+                                    heur_mod.format_snapshot_for_ui(_snap_r) if _snap_r else []
+                                ),
+                                'aggregate_heuristic_display': [],
                             }, room=player['socket_id'])
                 elif game_state['status'] in ['playing', 'voting']:
                     # Restore their generated images for both playing and voting states
@@ -828,15 +837,22 @@ def handle_join_game(data):
                                     except Exception as e:
                                         print(f"[RECONNECT] Could not fetch image_url from database for prompt_id {img_data.get('prompt_id')}: {e}")
                                 
+                                _snap_v = img_data.get('heuristic_snapshot')
                                 socketio.emit('image_generated', {
                                     'image_data': img_data.get('image_data', '') if not image_url else '',  # Only send base64 if no URL
                                     'image_url': image_url,  # Prefer URL over base64
                                     'ai_response': img_data.get('ai_response', ''),
                                     'prompt': img_data.get('prompt', ''),
                                     'image_index': player['images'][current_round].index(img_data),
+                                    'prompt_index': img_data.get('prompt_index'),
                                     'prompt_id': img_data.get('prompt_id'),
                                     'error_type': img_data.get('error_type'),  # Include error info for filtering
-                                    'file_size_kb': img_data.get('file_size_kb')
+                                    'file_size_kb': img_data.get('file_size_kb'),
+                                    'show_prompting_heuristics': heur_mod.show_prompting_heuristics(player.get('condition')),
+                                    'per_image_heuristic_display': (
+                                        heur_mod.format_snapshot_for_ui(_snap_v) if _snap_v else []
+                                    ),
+                                    'aggregate_heuristic_display': [],
                                 }, room=player['socket_id'])
                                 restored_count += 1
                         print(f"[RECONNECT] Restored {restored_count} images for player {player.get('display_name', player['name'])} in round {current_round} (status: {game_state['status']})")
@@ -1714,7 +1730,14 @@ def handle_send_prompt(data):
         player['prompt_count'] += 1
         opc = player['prompt_count']
 
-    emit('prompt_sent', {'prompt': prompt})
+    emit(
+        'prompt_sent',
+        {
+            'prompt': prompt,
+            'prompt_index': opc,
+            'onboarding': is_onboarding,
+        },
+    )
 
     ph_round = 1 if is_onboarding else current_round
 
@@ -2085,84 +2108,15 @@ def handle_send_prompt(data):
                 total_words=tw,
             )
 
-        # Save prompt to database and trigger async image upload
-        if not is_onboarding and db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-            submitted_at = datetime.fromtimestamp(time.time())
-            image_generated_at = datetime.fromtimestamp(time.time())
-            
-            # Save prompt to database (without image_url initially, with error info)
-            wc = heur_mod.word_count(prompt)
-            prompt_id = db.save_prompt_sync(
-                game_id=game_state['game_id'],
-                round_id=game_state['round_id'],
-                player_id=session_id,
-                prompt_index=prompt_index,
-                prompt_text=prompt,
-                image_url=None,  # Will be updated after async upload
-                ai_response=ai_response,
-                submitted_at=submitted_at,
-                image_generated_at=image_generated_at,
-                error_type=error_type,
-                error_message=error_message,
-                finish_reason=finish_reason,
-                file_size_kb=file_size_kb,
-                safety_ratings=safety_ratings,
-                word_count=wc,
-                prompt_sent_elapsed_seconds=prompt_elapsed,
-            )
-            
-            # Update image_entry with prompt_id
-            if prompt_id:
-                image_entry['prompt_id'] = prompt_id
-                
-                # Trigger async upload to Supabase Storage (non-blocking)
-                # Pass player_name and round_number for readable folder structure
-                # Add callback to clear base64 data after upload completes (memory optimization)
-                def clear_base64_after_upload(image_url, uploaded_prompt_id):
-                    """Callback to clear base64 data from in-memory image_entry after upload completes"""
-                    if session_id in players:
-                        player = players[session_id]
-                        # Find the image_entry by prompt_id and update it
-                        for img_entry in player['images'].get(current_round, []):
-                            if img_entry.get('prompt_id') == uploaded_prompt_id:
-                                img_entry['image_url'] = image_url
-                                if 'image_data' in img_entry:
-                                    del img_entry['image_data']
-                                print(f"[MEMORY] Cleared base64 data for prompt_id {uploaded_prompt_id}, using URL: {image_url[:50]}...")
-                                if player.get('socket_id'):
-                                    socketio.emit('image_url_updated', {
-                                        'prompt_id': uploaded_prompt_id,
-                                        'image_url': image_url
-                                    }, room=player['socket_id'])
-                                break
-                
-                db.upload_image_async(
-                    image_data=image_data,
-                    game_id=game_state['game_id'],
-                    player_id=session_id,
-                    round_id=game_state['round_id'],
-                    prompt_id=prompt_id,
-                    prompt_index=prompt_index,
-                    player_name=player['name'],  # For readable folder structure
-                    round_number=current_round,  # Round number (1, 2, or 3)
-                    callback=clear_base64_after_upload  # Memory optimization callback
-                )
-
-        # In-memory fallback so selection always has an id (DB insert failed, or no Supabase / round row)
-        if not is_onboarding and not image_entry.get('prompt_id'):
-            game_state['_synthetic_prompt_seq'] = game_state.get('_synthetic_prompt_seq', 0) + 1
-            image_entry['prompt_id'] = -game_state['_synthetic_prompt_seq']
-            print(
-                f"[WARN] Assigned synthetic prompt_id={image_entry['prompt_id']} "
-                "(no prompts row — check SUPABASE_URL / SUPABASE_KEY, round_id, and DB errors)"
-            )
-
+        # Emit image to client immediately so UI is not blocked on Supabase insert/upload.
+        # When DB is used, prompt_id is filled in a background task and sent via `image_prompt_binding`.
         ig_payload = {
             'image_data': image_data,
             'image_url': image_entry.get('image_url'),
             'ai_response': ai_response,
             'prompt': prompt,
             'image_index': len(image_bucket) - 1,
+            'prompt_index': prompt_index,
             'prompt_id': image_entry.get('prompt_id'),
             'error_type': error_type,
             'file_size_kb': file_size_kb,
@@ -2177,6 +2131,122 @@ def handle_send_prompt(data):
                 heur_mod.format_aggregate_for_ui(agg) if agg else []
             )
         socketio.emit('image_generated', ig_payload, room=player['socket_id'])
+
+        if not is_onboarding and db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
+            submitted_at = datetime.fromtimestamp(time.time())
+            image_generated_at = datetime.fromtimestamp(time.time())
+            wc = heur_mod.word_count(prompt)
+            gid = game_state['game_id']
+            rid = game_state['round_id']
+            img_data_for_upload = image_data
+            player_name_for_upload = player['name']
+
+            def _persist_prompt_row_async():
+                try:
+                    prompt_id_local = db.save_prompt_sync(
+                        game_id=gid,
+                        round_id=rid,
+                        player_id=session_id,
+                        prompt_index=prompt_index,
+                        prompt_text=prompt,
+                        image_url=None,
+                        ai_response=ai_response,
+                        submitted_at=submitted_at,
+                        image_generated_at=image_generated_at,
+                        error_type=error_type,
+                        error_message=error_message,
+                        finish_reason=finish_reason,
+                        file_size_kb=file_size_kb,
+                        safety_ratings=safety_ratings,
+                        word_count=wc,
+                        prompt_sent_elapsed_seconds=prompt_elapsed,
+                    )
+                    if session_id not in players:
+                        return
+                    pl = players[session_id]
+                    if prompt_id_local:
+                        image_entry['prompt_id'] = prompt_id_local
+
+                        def clear_base64_after_upload(image_url, uploaded_prompt_id):
+                            if session_id not in players:
+                                return
+                            pobj = players[session_id]
+                            for img_ent in pobj['images'].get(current_round, []):
+                                if img_ent.get('prompt_id') == uploaded_prompt_id:
+                                    img_ent['image_url'] = image_url
+                                    if 'image_data' in img_ent:
+                                        del img_ent['image_data']
+                                    print(
+                                        f"[MEMORY] Cleared base64 data for prompt_id {uploaded_prompt_id}, using URL: {image_url[:50]}..."
+                                    )
+                                    if pobj.get('socket_id'):
+                                        socketio.emit(
+                                            'image_url_updated',
+                                            {'prompt_id': uploaded_prompt_id, 'image_url': image_url},
+                                            room=pobj['socket_id'],
+                                        )
+                                    break
+
+                        db.upload_image_async(
+                            image_data=img_data_for_upload,
+                            game_id=gid,
+                            player_id=session_id,
+                            round_id=rid,
+                            prompt_id=prompt_id_local,
+                            prompt_index=prompt_index,
+                            player_name=player_name_for_upload,
+                            round_number=current_round,
+                            callback=clear_base64_after_upload,
+                        )
+                    else:
+                        game_state['_synthetic_prompt_seq'] = game_state.get('_synthetic_prompt_seq', 0) + 1
+                        image_entry['prompt_id'] = -game_state['_synthetic_prompt_seq']
+                        print(
+                            f"[WARN] Assigned synthetic prompt_id={image_entry['prompt_id']} "
+                            "(no prompts row — check SUPABASE_URL / SUPABASE_KEY, round_id, and DB errors)"
+                        )
+                    sock = pl.get('socket_id')
+                    if sock and image_entry.get('prompt_id') is not None:
+                        socketio.emit(
+                            'image_prompt_binding',
+                            {
+                                'prompt_index': prompt_index,
+                                'prompt_id': image_entry['prompt_id'],
+                            },
+                            room=sock,
+                        )
+                except Exception as ex:
+                    print(f"❌ Error in async prompt persist: {ex}")
+                    if session_id in players and image_entry.get('prompt_id') is None:
+                        game_state['_synthetic_prompt_seq'] = game_state.get('_synthetic_prompt_seq', 0) + 1
+                        image_entry['prompt_id'] = -game_state['_synthetic_prompt_seq']
+                        pl2 = players[session_id]
+                        if pl2.get('socket_id'):
+                            socketio.emit(
+                                'image_prompt_binding',
+                                {
+                                    'prompt_index': prompt_index,
+                                    'prompt_id': image_entry['prompt_id'],
+                                },
+                                room=pl2['socket_id'],
+                            )
+
+            socketio.start_background_task(_persist_prompt_row_async)
+        elif not is_onboarding and not image_entry.get('prompt_id'):
+            game_state['_synthetic_prompt_seq'] = game_state.get('_synthetic_prompt_seq', 0) + 1
+            image_entry['prompt_id'] = -game_state['_synthetic_prompt_seq']
+            print(
+                f"[WARN] Assigned synthetic prompt_id={image_entry['prompt_id']} "
+                "(no prompts row — check SUPABASE_URL / SUPABASE_KEY, round_id, and DB errors)"
+            )
+            socketio.emit(
+                'image_prompt_binding',
+                {
+                    'prompt_index': prompt_index,
+                    'prompt_id': image_entry['prompt_id'],
+                },
+                room=player['socket_id'],
+            )
 
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
             socketio.emit('player_prompt_updated', {
@@ -3169,6 +3239,7 @@ def handle_select_image(data):
 
     player = players[session_id]
     prompt_id = data.get('prompt_id')
+    prompt_index_sel = data.get('prompt_index')
     image_index = data.get('image_index')  # Keep for backward compatibility/validation
     current_round = game_state['current_round']
 
@@ -3183,6 +3254,23 @@ def handle_select_image(data):
         
         if not selected_image:
             print(f"❌ ERROR: Player {player.get('display_name', player['name'])} selected image with prompt_id {prompt_id} but it wasn't found in their images for round {current_round}")
+            emit('image_selected', {'success': False, 'error': 'Selected image not found. Please try selecting again.'})
+            return
+    elif prompt_index_sel is not None:
+        try:
+            pi = int(prompt_index_sel)
+        except (TypeError, ValueError):
+            pi = None
+        if pi is not None:
+            for img in player['images'][current_round]:
+                if int(img.get('prompt_index') or -1) == pi:
+                    selected_image = img
+                    break
+        if not selected_image:
+            print(
+                f"❌ ERROR: Player {player.get('display_name', player['name'])} selected prompt_index {prompt_index_sel} "
+                f"but it wasn't found in their images for round {current_round}"
+            )
             emit('image_selected', {'success': False, 'error': 'Selected image not found. Please try selecting again.'})
             return
     elif image_index is not None and image_index < len(player['images'][current_round]):
@@ -3200,11 +3288,20 @@ def handle_select_image(data):
         emit('image_selected', {'success': False, 'error': 'Cannot select error image. Please choose a valid image.'})
         return
     
-    # Server-side validation: Prevent selecting images without prompt_id
+    # Server-side validation: Prevent selecting images without prompt_id (may lag briefly while DB row saves)
     final_prompt_id = selected_image.get('prompt_id')
     if not final_prompt_id:
-        print(f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select image without prompt_id in round {current_round}. Rejecting selection.")
-        emit('image_selected', {'success': False, 'error': 'Cannot select image without valid prompt_id. Please choose a different image.'})
+        print(
+            f"❌ ERROR: Player {player.get('display_name', player['name'])} attempted to select image without prompt_id "
+            f"yet (round {current_round}, prompt_index={selected_image.get('prompt_index')})."
+        )
+        emit(
+            'image_selected',
+            {
+                'success': False,
+                'error': 'Image is still saving. Please wait a second and tap Confirm again.',
+            },
+        )
         return
     
     player['selected_images'][current_round] = selected_image
