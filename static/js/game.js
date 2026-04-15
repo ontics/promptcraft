@@ -800,13 +800,6 @@ document.getElementById('next-round-btn').addEventListener('click', () => {
     socket.emit('next_round');
 });
 
-// Back to Home (non-admin only)
-document.getElementById('back-to-home-btn')?.addEventListener('click', () => {
-    if (!gameState.isAdmin) {
-        socket.emit('back_to_home');
-    }
-});
-
 // Admin login via lobby footer link
 document.getElementById('admin-login-link')?.addEventListener('click', () => {
     const code = window.prompt('Enter admin password:');
@@ -1086,8 +1079,6 @@ socket.on('post_survey_started', (data) => {
     if (gameState.postSurveyCompleted) return;
     const hintGo = document.getElementById('gameover-post-survey-hint');
     if (hintGo) hintGo.style.display = 'none';
-    const backBtn = document.getElementById('back-to-home-btn');
-    if (backBtn) backBtn.style.display = 'none';
     resetPostGameSurveyForm();
     showScreen('postGameSurvey');
 });
@@ -2858,8 +2849,6 @@ socket.on('game_over', (data) => {
 
     const hintGo = document.getElementById('gameover-post-survey-hint');
     if (hintGo) hintGo.style.display = 'block';
-    const backBtnGo = document.getElementById('back-to-home-btn');
-    if (backBtnGo) backBtnGo.style.display = '';
 
     gameState.pendingGameOver = data;
     renderGameOverContent(data);
