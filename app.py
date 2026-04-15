@@ -82,6 +82,7 @@ game_state = {
     'onboarding_phase': 'prompting',
     # Post-game survey: Gamemaster opens via lobby; non-admin players must submit before leaving
     'post_survey_active': False,
+    'last_game_over_payload': None,  # shared results for post-survey → game_over (reconnect / submit)
     # Point-allocation voting (9 fixture rounds + 1 final); each player advances independently
     # DB: one voting_rounds row per vignette per game (fixture_set_key), not per display order.
     'allocation_vignette_vrids': {},  # fixture_set_key -> voting_round_id (shared across voters)
@@ -259,6 +260,29 @@ POST_SURVEY_TEXT_MAX_LEN = 2000
 VALID_POST_SURVEY_LIKERT = frozenset(
     {'strongly_disagree', 'disagree', 'neutral', 'agree', 'strongly_agree'}
 )
+VALID_POST_SURVEY_MATRIX1 = frozenset(
+    {'far_less', 'somewhat_less', 'same', 'somewhat_more', 'far_more'}
+)
+VALID_POST_SURVEY_IMPRESSIVE = frozenset(
+    {
+        'without_ai',
+        'without_ai_difficult',
+        'easily_with_ai',
+        'with_ai_difficult',
+        'dont_know',
+    }
+)
+_POST_MATRIX1_STEMS = ('longer', 'more', 'vocab')
+_POST_MATRIX1_ROWS = ('creative', 'precise', 'skilled', 'efficient')
+_POST_MATRIX2_KEYS = (
+    'visual_similarity',
+    'considers_prompt_count',
+    'considers_word_count',
+    'considers_vocab_variability',
+    'value_not_easily_created',
+    'few_prompts_better_understands',
+    'dozens_poor_engineering',
+)
 
 
 def ensure_survey_fields(player):
@@ -270,6 +294,49 @@ def ensure_survey_fields(player):
 
 def ensure_post_survey_fields(player):
     player.setdefault('post_survey_completed', False)
+
+
+def _broadcast_post_survey_after_game_over(results_payload: dict) -> None:
+    """Non-admins who have not completed the survey see it immediately; completed players see final results."""
+    game_state['post_survey_active'] = True
+    game_state['last_game_over_payload'] = results_payload
+    for p in players.values():
+        if p.get('is_admin'):
+            continue
+        ensure_post_survey_fields(p)
+        hydrate_post_survey_from_db(p)
+        sock = p.get('socket_id')
+        if not sock:
+            continue
+        if p.get('post_survey_completed'):
+            socketio.emit('game_over', results_payload, room=sock)
+        else:
+            socketio.emit('post_survey_started', {'game_over': results_payload}, room=sock)
+    notify_admin_player_list()
+
+
+def _parse_post_survey_extended(data: dict):
+    """Validate matrix1, matrix2, impressive_if. Returns (extended_dict, None) or (None, error_message)."""
+    m1 = data.get('matrix1') or {}
+    m2 = data.get('matrix2') or {}
+    for stem in _POST_MATRIX1_STEMS:
+        block = m1.get(stem)
+        if not isinstance(block, dict):
+            return None, f'Invalid matrix1.{stem}'
+        for row in _POST_MATRIX1_ROWS:
+            v = block.get(row)
+            if v not in VALID_POST_SURVEY_MATRIX1:
+                return None, f'Please answer all rows in matrix 1 ({stem})'
+    if not isinstance(m2, dict):
+        return None, 'Invalid matrix2'
+    for key in _POST_MATRIX2_KEYS:
+        v = m2.get(key)
+        if v not in VALID_POST_SURVEY_LIKERT:
+            return None, 'Please answer all rows in matrix 2'
+    imp = data.get('impressive_if')
+    if imp not in VALID_POST_SURVEY_IMPRESSIVE:
+        return None, 'Please select an answer for “AI images are more impressive if”'
+    return {'matrix1': m1, 'matrix2': m2, 'impressive_if': imp}, None
 
 
 def hydrate_post_survey_from_db(player):
@@ -294,14 +361,15 @@ def emit_post_survey_if_pending(player):
     if not sock:
         return
     if game_state.get('post_survey_active') and not player.get('post_survey_completed'):
-        socketio.emit('post_survey_started', {}, room=sock)
+        go = game_state.get('last_game_over_payload')
+        socketio.emit('post_survey_started', {'game_over': go} if go else {}, room=sock)
 
 
 def game_joined_player_snapshot(player):
     ensure_survey_fields(player)
     ensure_post_survey_fields(player)
     hydrate_post_survey_from_db(player)
-    return {
+    snap = {
         'name': player.get('display_name', player['name']),
         'condition': player.get('condition') or player.get('team'),
         'character': player['character'],
@@ -311,6 +379,13 @@ def game_joined_player_snapshot(player):
         'post_survey_completed': bool(player.get('post_survey_completed')),
         'post_survey_active': bool(game_state.get('post_survey_active')),
     }
+    if (
+        not player.get('is_admin')
+        and player.get('post_survey_completed')
+        and game_state.get('last_game_over_payload')
+    ):
+        snap['post_survey_game_over'] = game_state['last_game_over_payload']
+    return snap
 
 
 def lobby_player_row(p, use_socket_id_key=False):
@@ -348,8 +423,8 @@ def admin_lobby_player_row(p):
 
 
 def gamemaster_can_start_post_survey():
-    """True when a DB game exists and post-survey is not already open."""
-    return bool(game_state.get('game_id') and not game_state.get('post_survey_active'))
+    """Post-survey now opens automatically when voting ends; no lobby trigger."""
+    return False
 
 
 def admin_joined_payload():
@@ -1186,58 +1261,20 @@ def _likert_label(slug: str) -> str:
 
 @socketio.on('admin_start_post_survey')
 def handle_admin_start_post_survey():
-    """Gamemaster opens post-game survey for all connected non-admin players."""
+    """Deprecated: post-game survey opens automatically when voting completes."""
     session_id = session.get('session_id')
     if session_id != admin_session_id:
-        emit('error', {'message': 'Only the Gamemaster can start the post-game survey'})
+        emit('error', {'message': 'Only the Gamemaster can use this action'})
         return
-    non_admin_count = len([p for p in players.values() if not p.get('is_admin')])
-    if non_admin_count < 1:
-        emit(
-            'error',
-            {
-                'message': (
-                    'You need at least one player in the lobby before you can start the post-game survey. '
-                    'Have participants join first, then try again.'
-                ),
-            },
-        )
-        return
-    if not game_state.get('game_id'):
-        if not db.is_configured():
-            emit(
-                'error',
-                {
-                    'message': (
-                        'Post-game survey needs a database game session. Configure Supabase '
-                        '(SUPABASE_URL and SUPABASE_KEY), restart the app, then run Start Game so player '
-                        'rows are created.'
-                    ),
-                },
-            )
-        else:
-            emit(
-                'error',
-                {
-                    'message': (
-                        'Start Game (the scored match) first — that creates the database game and player '
-                        'records. Start Onboarding alone does not; if you already restarted or never clicked '
-                        'Start Game after joining, do that now.'
-                    ),
-                },
-            )
-        return
-    if game_state.get('post_survey_active'):
-        emit('error', {'message': 'Post-game survey is already in progress.'})
-        return
-    game_state['post_survey_active'] = True
-    for p in players.values():
-        if p.get('is_admin'):
-            continue
-        ensure_post_survey_fields(p)
-        hydrate_post_survey_from_db(p)
-        emit_post_survey_if_pending(p)
-    notify_admin_player_list()
+    emit(
+        'error',
+        {
+            'message': (
+                'The post-game survey opens automatically for players when voting ends. '
+                'No manual start is needed.'
+            ),
+        },
+    )
 
 
 @socketio.on('submit_post_game_survey')
@@ -1276,6 +1313,10 @@ def handle_submit_post_game_survey(data):
     if l1 not in VALID_POST_SURVEY_LIKERT or l2 not in VALID_POST_SURVEY_LIKERT:
         emit('error', {'message': 'Please select an answer for both rating questions'})
         return
+    ext, ext_err = _parse_post_survey_extended(data)
+    if ext_err:
+        emit('error', {'message': ext_err})
+        return
     if db.is_configured():
         ok = db.update_player_post_survey(
             gid,
@@ -1286,6 +1327,7 @@ def handle_submit_post_game_survey(data):
             fq[3],
             _likert_label(l1),
             _likert_label(l2),
+            ext,
         )
         if not ok:
             emit('error', {'message': 'Could not save survey. Try again.'})
@@ -1293,7 +1335,8 @@ def handle_submit_post_game_survey(data):
     else:
         print('⚠️ Post-game survey accepted in memory only (Supabase not configured)')
     player['post_survey_completed'] = True
-    emit('post_game_survey_saved', {'success': True})
+    go = game_state.get('last_game_over_payload')
+    emit('post_game_survey_saved', {'success': True, 'game_over': go})
     notify_admin_player_list()
 
 
@@ -1506,6 +1549,8 @@ def handle_start_game():
         game_state['current_target'] = game_state['target_images'][0]
         game_state['round_start_time'] = time.time()
         game_state['round_end_time'] = game_state['round_start_time'] + 300  # 5 minutes
+        game_state['last_game_over_payload'] = None
+        game_state['post_survey_active'] = False
 
         # Create round in database
         if db.is_configured() and game_state.get('game_id'):
@@ -1529,6 +1574,9 @@ def handle_start_game():
                 p['onboarding_has_successful'] = False
                 p['onboarding_practice_points'] = None
                 p['onboarding_practice_submitted'] = False
+                p['post_survey_completed'] = False
+                ensure_post_survey_fields(p)
+                hydrate_post_survey_from_db(p)
                 print(f"[DEBUG] Reset current_image, prompt_count, and has_successful_prompt for player {p['name']}, round 1")
 
         # Send game started to players only (not admin) - must check socket_id, None defaults to current request context
@@ -2845,9 +2893,6 @@ def finish_experiment_final_ranking():
     game_state['status'] = 'game_over'
     if db.is_configured() and game_state.get('game_id'):
         db.end_game(game_id=game_state['game_id'], rounds_completed=3)
-    for p in players.values():
-        if not p['is_admin'] and p.get('socket_id'):
-            socketio.emit('game_over', {'results': results, 'experiment': True}, room=p['socket_id'])
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         socketio.emit('admin_game_over', {
             'results': results,
@@ -2858,6 +2903,7 @@ def finish_experiment_final_ranking():
                 'session_id': x['session_id'],
             } for x in non_admin],
         }, room=players[admin_session_id]['socket_id'])
+    _broadcast_post_survey_after_game_over({'results': results, 'experiment': True})
     game_state['status'] = 'lobby'
     print('[GAME] Experiment complete — final ranking sent')
 
@@ -3758,19 +3804,11 @@ def end_game():
 
     final_results.sort(key=lambda x: x['total_score'], reverse=True)
 
-    # Send to players only (not admin) - must check socket_id, None defaults to current request context
-    for p in players.values():
-        if not p['is_admin']:
-            socket_id = p.get('socket_id')
-            if socket_id:  # Only send if player is connected
-                socketio.emit('game_over', {
-                    'results': final_results
-                }, room=socket_id)
-    
-    # Send admin view
+    # Send admin view (players: post-survey first, then game_over after submit)
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
         socketio.emit('admin_game_over', {
             'results': final_results,
+            'experiment': False,
             'players': [{
                 'name': p.get('display_name', p['name']),
                 'condition': p['condition'],
@@ -3780,6 +3818,8 @@ def end_game():
                 'prompts_submitted': sum(len(p['images'].get(r, [])) for r in [1, 2, 3])
             } for p in players.values() if not p['is_admin']]
         }, room=players[admin_session_id]['socket_id'])
+
+    _broadcast_post_survey_after_game_over({'results': final_results})
 
     print("Game over!")
     
@@ -3992,6 +4032,7 @@ def handle_restart_game():
     game_state['game_id'] = None  # This ensures a new game_id will be created on next start
     game_state['round_id'] = None
     game_state['post_survey_active'] = False
+    game_state['last_game_over_payload'] = None
 
     # Kick ALL players including admin - remove them from the game and require them to rejoin
     players_to_remove = []
@@ -4109,6 +4150,7 @@ def handle_clear_lobby():
 
     if len([p for p in players.values() if not p['is_admin']]) == 0:
         game_state['post_survey_active'] = False
+        game_state['last_game_over_payload'] = None
 
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
@@ -4402,6 +4444,7 @@ def restart_game_console():
     game_state['game_id'] = None
     game_state['round_id'] = None
     game_state['post_survey_active'] = False
+    game_state['last_game_over_payload'] = None
 
     # Kick ALL players including admin
     global admin_session_id
