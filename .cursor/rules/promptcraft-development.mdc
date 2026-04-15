@@ -13,8 +13,6 @@ When working in this codebase:
 
 3. **Branches**: All new work happens on feature branches from `v2`. Do not merge `v2` into `main` until the team agrees v2 is ready.
 
-4. **Pull requests (mandatory for integration)**: When the user asks to land work on `v2` (e.g. “push to v2”, “merge”, “integrate”, “LGTM”), **do not** `git merge` into local `v2` and `git push origin v2`. That bypasses GitHub review. Instead: commit on the **feature branch**, `git push origin <feature-branch>`, and give them the **Create PR** link: `https://github.com/ontics/promptcraft/compare/v2...<feature-branch>?expand=1` (adjust org/repo if different). Optionally run `gh pr create --base v2 --head <branch>` if `gh` is installed and authenticated. Only merge `v2` locally and push if the user **explicitly** asks for a local merge without a PR.
+4. **Conflicts**: When resolving merge conflicts, combine both sides' behavior where they affect different features; use the guidelines in GUIDELINES.md for AI-assisted conflict resolution.
 
-5. **Conflicts**: When resolving merge conflicts, combine both sides' behavior where they affect different features; use the guidelines in GUIDELINES.md for AI-assisted conflict resolution.
-
-6. **Testing**: No automated suite yet. Run the app and the smoke test (create game, 2 players, one full round) and use `PLAYTEST_2_TESTING_CHECKLIST.md` when touching reconnection, admin, or voting.
+5. **Testing**: No automated suite yet. Run the app and the smoke test (create game, 2 players, one full round) and use `PLAYTEST_2_TESTING_CHECKLIST.md` when touching reconnection, admin, or voting.
