@@ -352,9 +352,9 @@ body {
 
 .main-game-layout {
     display: grid;
-    /* Slightly narrow target column so any under-target panels remain visible at 1080p with scaling */
-    grid-template-columns: 2fr 0.9fr;
-    gap: 20px;
+    /* Fixed-ish right column width so the target column reads clearly narrower on wide screens */
+    grid-template-columns: minmax(0, 1fr) minmax(240px, 280px);
+    gap: 16px;
     height: 100%;
     min-height: 0; /* Allow grid to shrink */
 }
@@ -512,7 +512,11 @@ body {
 }
 
 .target-image-section {
-    flex-shrink: 0; /* Don't shrink the target image section */
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
 }
 
 .target-image-section h3 {
@@ -522,25 +526,36 @@ body {
 }
 
 .target-image-container {
-    /* Target images are square and must not be cropped. Keep the container square. */
+    /* Square frame; image is letterboxed inside (no crop). Absolute img avoids flex sizing bugs. */
+    position: relative;
     width: 100%;
-    max-width: 330px; /* slight downscale to free vertical space for heuristics */
+    max-width: 260px;
     margin: 0 auto;
-    aspect-ratio: 1;
+    aspect-ratio: 1 / 1;
+    flex: 0 0 auto;
+    min-height: 0;
     background: #f8f9fa;
     border: 2px solid #e0e0e0;
     border-radius: 10px;
     overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
 }
 
 .target-image-container img {
+    position: absolute;
+    left: 0;
+    top: 0;
     width: 100%;
     height: 100%;
     object-fit: contain;
     background: #f8f9fa;
+}
+
+/* Under-target content scrolls if needed so heuristics don't push the target off-screen */
+.right-column .below-target-section {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    width: 100%;
 }
 
 .character-section {

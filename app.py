@@ -60,6 +60,19 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 # Configure Gemini API
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 
+# Reuse one google.genai Client for all prompts — constructing a Client per request adds measurable latency.
+_genai_sdk_client: Optional[object] = None
+
+
+def get_google_genai_client():
+    global _genai_sdk_client
+    if _genai_sdk_client is None:
+        key = os.getenv('GEMINI_API_KEY')
+        if not key:
+            return None
+        _genai_sdk_client = google_genai.Client(api_key=key)
+    return _genai_sdk_client
+
 # Game state
 game_state = {
     'status': 'lobby',  # lobby, onboarding, playing, voting, voting_prep, allocation_voting, round_results, game_over
@@ -1702,12 +1715,6 @@ def handle_send_prompt(data):
     current_round = game_state['current_round']
     is_onboarding = game_state['status'] == 'onboarding'
 
-    # Prevent concurrent prompt generations per player/session (racey ordering + occasional stuck spinners).
-    # If a second prompt comes in while the first is still running, reject it quickly so the UI isn't left hanging.
-    if player.get('_prompt_in_flight'):
-        emit('error', {'message': 'Please wait for your current image to finish generating before sending another prompt.'})
-        return
-
     if is_onboarding:
         ensure_onboarding_player_fields(player)
         if game_state.get('onboarding_phase') == 'practice_voting':
@@ -1782,7 +1789,6 @@ def handle_send_prompt(data):
         emit('character_message', character_data)
 
     # Generate image via Gemini when configured, else local placeholder (see use_stub_image_generation).
-    player['_prompt_in_flight'] = True
     try:
         if is_onboarding:
             conversation = player['onboarding_conversation']
@@ -1822,9 +1828,11 @@ def handle_send_prompt(data):
                 player['current_image'][current_round] = pil_img
                 player['has_successful_prompt'][current_round] = True
         else:
-            client = google_genai.Client(api_key=os.getenv('GEMINI_API_KEY'))
-
-            print(f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {ph_round}, onboarding={is_onboarding}, Has current_image: {current_image_obj is not None}")
+            client = get_google_genai_client()
+            print(
+                f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {ph_round}, "
+                f"onboarding={is_onboarding}, Has current_image: {current_image_obj is not None}"
+            )
         
             # Construct contents array: include previous image if exists, otherwise just prompt
             # IMPORTANT: No target description or context is added - only the user's prompt is sent
@@ -1854,6 +1862,10 @@ def handle_send_prompt(data):
         
             # Generate image using gemini-2.5-flash-image model
             try:
+                print(
+                    f"[LATENCY] pre-Gemini elapsed {time.time() - prompt_sent_ts:.3f}s since prompt_sent "
+                    f"(player={session_id[:8]} round={ph_round} prompt_index={opc})"
+                )
                 t_api_start = time.time()
                 response = client.models.generate_content(
                     model="gemini-2.5-flash-image",
@@ -2323,10 +2335,6 @@ def handle_send_prompt(data):
             'error_type': error_type,
             'suggest_retry': True
         }, room=player['socket_id'])
-    finally:
-        # Always clear prompt in-flight gate so subsequent prompts can proceed.
-        if session_id in players:
-            players[session_id]['_prompt_in_flight'] = False
 
 def extract_api_error_info(response):
     """
