@@ -2069,7 +2069,9 @@ def handle_send_prompt(data):
         else:
             image_bucket = player['images'][current_round]
 
-        prompt_index = len(image_bucket) + 1
+        # IMPORTANT: prompt_index must reflect SEND order, not completion order.
+        # Otherwise, if prompt B returns before prompt A, the UI placeholders can be filled in swapped order.
+        prompt_index = int(opc)
 
         prompt_elapsed = 0
         if not is_onboarding:
@@ -2117,7 +2119,8 @@ def handle_send_prompt(data):
             'image_url': image_entry.get('image_url'),
             'ai_response': ai_response,
             'prompt': prompt,
-            'image_index': len(image_bucket) - 1,
+            # Keep for backward compatibility; selection routing now prefers prompt_id/prompt_index.
+            'image_index': max(0, prompt_index - 1),
             'prompt_index': prompt_index,
             'prompt_id': image_entry.get('prompt_id'),
             'error_type': error_type,
