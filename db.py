@@ -209,27 +209,45 @@ def update_player_post_survey(
     free_q4: str,
     likert_best_work: str,
     likert_effort: str,
+    extended: Optional[Dict[str, Any]] = None,
 ) -> bool:
     """Persist post-game survey answers on the analytics `players` row."""
     if not is_configured() or not game_id or not player_id:
         return False
     try:
         now = datetime.utcnow().isoformat()
-        supabase.table('players').update(
-            {
-                'post_survey_free_q1': free_q1,
-                'post_survey_free_q2': free_q2,
-                'post_survey_free_q3': free_q3,
-                'post_survey_free_q4': free_q4,
-                'post_survey_likert_best_work': likert_best_work,
-                'post_survey_likert_effort': likert_effort,
-                'post_survey_submitted_at': now,
-            }
-        ).eq('player_id', player_id).eq('game_id', game_id).execute()
+        row = {
+            'post_survey_free_q1': free_q1,
+            'post_survey_free_q2': free_q2,
+            'post_survey_free_q3': free_q3,
+            'post_survey_free_q4': free_q4,
+            'post_survey_likert_best_work': likert_best_work,
+            'post_survey_likert_effort': likert_effort,
+            'post_survey_submitted_at': now,
+        }
+        if extended is not None:
+            row['post_survey_extended'] = extended
+        supabase.table('players').update(row).eq('player_id', player_id).eq('game_id', game_id).execute()
         print(f"✅ Saved post-survey for player {player_id[:8]}... game_id={game_id}")
         return True
     except Exception as e:
         print(f"❌ Error updating post-survey: {e}")
+        if extended is not None and 'post_survey_extended' in str(e).lower():
+            try:
+                fallback = {
+                    'post_survey_free_q1': free_q1,
+                    'post_survey_free_q2': free_q2,
+                    'post_survey_free_q3': free_q3,
+                    'post_survey_free_q4': free_q4,
+                    'post_survey_likert_best_work': likert_best_work,
+                    'post_survey_likert_effort': likert_effort,
+                    'post_survey_submitted_at': now,
+                }
+                supabase.table('players').update(fallback).eq('player_id', player_id).eq('game_id', game_id).execute()
+                print(f"✅ Saved post-survey (without extended JSON) for player {player_id[:8]}... game_id={game_id}")
+                return True
+            except Exception as e2:
+                print(f"❌ Error updating post-survey fallback: {e2}")
         return False
 
 
