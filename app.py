@@ -1702,6 +1702,12 @@ def handle_send_prompt(data):
     current_round = game_state['current_round']
     is_onboarding = game_state['status'] == 'onboarding'
 
+    # Prevent concurrent prompt generations per player/session (racey ordering + occasional stuck spinners).
+    # If a second prompt comes in while the first is still running, reject it quickly so the UI isn't left hanging.
+    if player.get('_prompt_in_flight'):
+        emit('error', {'message': 'Please wait for your current image to finish generating before sending another prompt.'})
+        return
+
     if is_onboarding:
         ensure_onboarding_player_fields(player)
         if game_state.get('onboarding_phase') == 'practice_voting':
@@ -1776,6 +1782,7 @@ def handle_send_prompt(data):
         emit('character_message', character_data)
 
     # Generate image via Gemini when configured, else local placeholder (see use_stub_image_generation).
+    player['_prompt_in_flight'] = True
     try:
         if is_onboarding:
             conversation = player['onboarding_conversation']
@@ -1847,9 +1854,15 @@ def handle_send_prompt(data):
         
             # Generate image using gemini-2.5-flash-image model
             try:
+                t_api_start = time.time()
                 response = client.models.generate_content(
                     model="gemini-2.5-flash-image",
                     contents=contents
+                )
+                t_api_end = time.time()
+                print(
+                    f"[LATENCY] Gemini generate_content took {t_api_end - t_api_start:.2f}s "
+                    f"player={session_id[:8]} round={ph_round} prompt_index={opc}"
                 )
             
                 # Validate game state and player still exist (in case game was restarted during API call)
@@ -2310,6 +2323,10 @@ def handle_send_prompt(data):
             'error_type': error_type,
             'suggest_retry': True
         }, room=player['socket_id'])
+    finally:
+        # Always clear prompt in-flight gate so subsequent prompts can proceed.
+        if session_id in players:
+            players[session_id]['_prompt_in_flight'] = False
 
 def extract_api_error_info(response):
     """

@@ -353,7 +353,7 @@ body {
 .main-game-layout {
     display: grid;
     /* Slightly narrow target column so any under-target panels remain visible at 1080p with scaling */
-    grid-template-columns: 1.8fr 1fr;
+    grid-template-columns: 2fr 0.9fr;
     gap: 20px;
     height: 100%;
     min-height: 0; /* Allow grid to shrink */
@@ -522,10 +522,11 @@ body {
 }
 
 .target-image-container {
-    /* Target images are square and must not be cropped. */
-    aspect-ratio: 1;
-    max-height: min(340px, 34vh);
+    /* Target images are square and must not be cropped. Keep the container square. */
     width: 100%;
+    max-width: 330px; /* slight downscale to free vertical space for heuristics */
+    margin: 0 auto;
+    aspect-ratio: 1;
     background: #f8f9fa;
     border: 2px solid #e0e0e0;
     border-radius: 10px;
