@@ -1,8 +1,12 @@
 """
-Greedy balancing: assign each voter 3 owner player_ids for the final round so
-appearance counts stay as even as possible. With fewer than 4 players in the
-session, the same peer may appear multiple times on a ballot (required so each
-voter still allocates 10 points across 3 slots).
+Round-10 assignment:
+- Shuffle players once.
+- Assign each voter the next k players in a circular shift.
+
+This guarantees:
+- no self-views
+- no duplicate submitters per voter
+- equal exposure for every submitter
 """
 from __future__ import annotations
 
@@ -14,37 +18,27 @@ def assign_final_ballots(voter_ids: List[str], owner_ids: List[str], seed: int =
     """
     Return mapping voter_id -> [owner_a, owner_b, owner_c].
 
-    Never assigns a voter their own image when other players exist. If there are
-    not enough distinct peers to fill 3 slots, repeats peers (lowest appearance
-    count first) so the UI always has 3 targets.
+    Uses a randomized circular assignment:
+    voter i receives owners at (i+1), (i+2), ... (i+k) modulo N
+    over one shuffled player list.
     """
-    voters = list(voter_ids)
+    voters = [v for v in voter_ids if v]
     owners = [o for o in owner_ids if o]
     rng = random.Random(seed)
-    rng.shuffle(voters)
     if len(owners) < 2:
         raise ValueError("Need at least 2 players with round-3 selections for final voting.")
 
-    appearances = {o: 0 for o in owners}
+    # Use common eligible set (intersection), preserving owner identity.
+    player_ids = [p for p in owners if p in set(voters)]
+    if len(player_ids) < 2:
+        raise ValueError("Need at least 2 overlapping voters/owners for final voting.")
+
+    rng.shuffle(player_ids)
+    n = len(player_ids)
+    k = 3 if n >= 4 else max(1, n - 1)
+
     out: Dict[str, List[str]] = {}
-
-    def pick_three_for(v: str) -> List[str]:
-        eligible = [o for o in owners if o != v]
-        if not eligible:
-            # Only one player in owners list (shouldn't happen if len(owners) >= 2)
-            pool = list(owners)
-            rng.shuffle(pool)
-            return [pool[0], pool[0], pool[0]]
-
-        triple: List[str] = []
-        while len(triple) < 3:
-            ranked = sorted(eligible, key=lambda o: (appearances[o], rng.random()))
-            o = ranked[0]
-            triple.append(o)
-            appearances[o] += 1
-        return triple
-
-    for v in voters:
-        out[v] = pick_three_for(v)
+    for i, voter in enumerate(player_ids):
+        out[voter] = [player_ids[(i + shift) % n] for shift in range(1, k + 1)]
 
     return out
