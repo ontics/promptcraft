@@ -31,7 +31,6 @@
                                     <button id="assign-teams-btn" class="btn btn-primary">Assign Groups</button>
                                     <button id="start-onboarding-btn" type="button" class="btn btn-onboarding">Start Onboarding</button>
                                     <button id="start-game-btn" class="btn btn-success">Start Game</button>
-                                    <button id="start-post-survey-btn" type="button" class="btn btn-secondary">Start post-game survey</button>
                                     <button id="restart-game-btn" class="btn btn-danger" style="margin-top: 10px;">🔄 Restart Game</button>
                                 </div>
                             </div>
@@ -308,40 +307,103 @@
                 <div id="final-results" class="final-results">
                 </div>
 
-                <p id="gameover-post-survey-hint" class="gameover-post-survey-hint" style="display: none;">The Gamemaster will open a short survey — stay on this screen until it appears, or complete it when prompted.</p>
+                <p id="gameover-post-survey-hint" class="gameover-post-survey-hint" style="display: none;">A short survey will appear automatically after voting — stay on this screen if you see it here first.</p>
 
                 <button id="back-to-home-btn" class="btn btn-success">Back to Home</button>
             </div>
         </div>
 
-        <!-- Post-game survey (non-admin, required when opened by Gamemaster) -->
+        <!-- Post-game survey (non-admin; opens automatically after voting completes) -->
         <div id="post-game-survey-screen" class="screen">
             <div class="container post-game-survey-container">
                 <h1 class="post-game-survey-title-main">Post-game survey</h1>
                 <p class="post-game-survey-intro">Please answer every question. All fields are required.</p>
                 <div id="post-game-survey-form-wrap">
-                    <fieldset class="lobby-survey-fieldset">
-                        <legend>1</legend>
+                    <fieldset class="post-survey-fieldset post-survey-matrix-fieldset">
+                        <legend>Likert matrix 1 — longer prompts</legend>
+                        <p class="post-survey-stem">A person who submits <strong>longer</strong> prompts is:</p>
+                        <table class="post-survey-likert-table" aria-label="Longer prompts matrix">
+                            <thead><tr><th></th><th>Far Less</th><th>Somewhat Less</th><th>The Same</th><th>Somewhat More</th><th>Far More</th></tr></thead>
+                            <tbody>
+                                <tr><th scope="row">Creative</th><td><input type="radio" name="post-m1-longer-creative" value="far_less" required></td><td><input type="radio" name="post-m1-longer-creative" value="somewhat_less"></td><td><input type="radio" name="post-m1-longer-creative" value="same"></td><td><input type="radio" name="post-m1-longer-creative" value="somewhat_more"></td><td><input type="radio" name="post-m1-longer-creative" value="far_more"></td></tr>
+                                <tr><th scope="row">Precise</th><td><input type="radio" name="post-m1-longer-precise" value="far_less" required></td><td><input type="radio" name="post-m1-longer-precise" value="somewhat_less"></td><td><input type="radio" name="post-m1-longer-precise" value="same"></td><td><input type="radio" name="post-m1-longer-precise" value="somewhat_more"></td><td><input type="radio" name="post-m1-longer-precise" value="far_more"></td></tr>
+                                <tr><th scope="row">Skilled</th><td><input type="radio" name="post-m1-longer-skilled" value="far_less" required></td><td><input type="radio" name="post-m1-longer-skilled" value="somewhat_less"></td><td><input type="radio" name="post-m1-longer-skilled" value="same"></td><td><input type="radio" name="post-m1-longer-skilled" value="somewhat_more"></td><td><input type="radio" name="post-m1-longer-skilled" value="far_more"></td></tr>
+                                <tr><th scope="row">Efficient</th><td><input type="radio" name="post-m1-longer-efficient" value="far_less" required></td><td><input type="radio" name="post-m1-longer-efficient" value="somewhat_less"></td><td><input type="radio" name="post-m1-longer-efficient" value="same"></td><td><input type="radio" name="post-m1-longer-efficient" value="somewhat_more"></td><td><input type="radio" name="post-m1-longer-efficient" value="far_more"></td></tr>
+                            </tbody>
+                        </table>
+                    </fieldset>
+                    <fieldset class="post-survey-fieldset post-survey-matrix-fieldset">
+                        <legend>Likert matrix 1 — more prompts</legend>
+                        <p class="post-survey-stem">A person who submits <strong>more</strong> prompts is:</p>
+                        <table class="post-survey-likert-table" aria-label="More prompts matrix">
+                            <thead><tr><th></th><th>Far Less</th><th>Somewhat Less</th><th>The Same</th><th>Somewhat More</th><th>Far More</th></tr></thead>
+                            <tbody>
+                                <tr><th scope="row">Creative</th><td><input type="radio" name="post-m1-more-creative" value="far_less" required></td><td><input type="radio" name="post-m1-more-creative" value="somewhat_less"></td><td><input type="radio" name="post-m1-more-creative" value="same"></td><td><input type="radio" name="post-m1-more-creative" value="somewhat_more"></td><td><input type="radio" name="post-m1-more-creative" value="far_more"></td></tr>
+                                <tr><th scope="row">Precise</th><td><input type="radio" name="post-m1-more-precise" value="far_less" required></td><td><input type="radio" name="post-m1-more-precise" value="somewhat_less"></td><td><input type="radio" name="post-m1-more-precise" value="same"></td><td><input type="radio" name="post-m1-more-precise" value="somewhat_more"></td><td><input type="radio" name="post-m1-more-precise" value="far_more"></td></tr>
+                                <tr><th scope="row">Skilled</th><td><input type="radio" name="post-m1-more-skilled" value="far_less" required></td><td><input type="radio" name="post-m1-more-skilled" value="somewhat_less"></td><td><input type="radio" name="post-m1-more-skilled" value="same"></td><td><input type="radio" name="post-m1-more-skilled" value="somewhat_more"></td><td><input type="radio" name="post-m1-more-skilled" value="far_more"></td></tr>
+                                <tr><th scope="row">Efficient</th><td><input type="radio" name="post-m1-more-efficient" value="far_less" required></td><td><input type="radio" name="post-m1-more-efficient" value="somewhat_less"></td><td><input type="radio" name="post-m1-more-efficient" value="same"></td><td><input type="radio" name="post-m1-more-efficient" value="somewhat_more"></td><td><input type="radio" name="post-m1-more-efficient" value="far_more"></td></tr>
+                            </tbody>
+                        </table>
+                    </fieldset>
+                    <fieldset class="post-survey-fieldset post-survey-matrix-fieldset">
+                        <legend>Likert matrix 1 — vocabulary</legend>
+                        <p class="post-survey-stem">A person who submits prompts with <strong>more variable vocabulary</strong> is…</p>
+                        <table class="post-survey-likert-table" aria-label="Vocabulary matrix">
+                            <thead><tr><th></th><th>Far Less</th><th>Somewhat Less</th><th>The Same</th><th>Somewhat More</th><th>Far More</th></tr></thead>
+                            <tbody>
+                                <tr><th scope="row">Creative</th><td><input type="radio" name="post-m1-vocab-creative" value="far_less" required></td><td><input type="radio" name="post-m1-vocab-creative" value="somewhat_less"></td><td><input type="radio" name="post-m1-vocab-creative" value="same"></td><td><input type="radio" name="post-m1-vocab-creative" value="somewhat_more"></td><td><input type="radio" name="post-m1-vocab-creative" value="far_more"></td></tr>
+                                <tr><th scope="row">Precise</th><td><input type="radio" name="post-m1-vocab-precise" value="far_less" required></td><td><input type="radio" name="post-m1-vocab-precise" value="somewhat_less"></td><td><input type="radio" name="post-m1-vocab-precise" value="same"></td><td><input type="radio" name="post-m1-vocab-precise" value="somewhat_more"></td><td><input type="radio" name="post-m1-vocab-precise" value="far_more"></td></tr>
+                                <tr><th scope="row">Skilled</th><td><input type="radio" name="post-m1-vocab-skilled" value="far_less" required></td><td><input type="radio" name="post-m1-vocab-skilled" value="somewhat_less"></td><td><input type="radio" name="post-m1-vocab-skilled" value="same"></td><td><input type="radio" name="post-m1-vocab-skilled" value="somewhat_more"></td><td><input type="radio" name="post-m1-vocab-skilled" value="far_more"></td></tr>
+                                <tr><th scope="row">Efficient</th><td><input type="radio" name="post-m1-vocab-efficient" value="far_less" required></td><td><input type="radio" name="post-m1-vocab-efficient" value="somewhat_less"></td><td><input type="radio" name="post-m1-vocab-efficient" value="same"></td><td><input type="radio" name="post-m1-vocab-efficient" value="somewhat_more"></td><td><input type="radio" name="post-m1-vocab-efficient" value="far_more"></td></tr>
+                            </tbody>
+                        </table>
+                    </fieldset>
+                    <fieldset class="post-survey-fieldset post-survey-matrix-fieldset">
+                        <legend>Likert matrix 2</legend>
+                        <table class="post-survey-likert-table post-survey-likert-table-m2" aria-label="Voting considerations matrix">
+                            <thead><tr><th></th><th>Strongly Disagree</th><th>Disagree</th><th>Neutral</th><th>Agree</th><th>Strongly Agree</th></tr></thead>
+                            <tbody>
+                                <tr><th scope="row" class="post-survey-m2-prompt">I voted for images based purely on their visual similarity to the target image</th><td><input type="radio" name="post-m2-visual_similarity" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-visual_similarity" value="disagree"></td><td><input type="radio" name="post-m2-visual_similarity" value="neutral"></td><td><input type="radio" name="post-m2-visual_similarity" value="agree"></td><td><input type="radio" name="post-m2-visual_similarity" value="strongly_agree"></td></tr>
+                                <tr><th scope="row" class="post-survey-m2-prompt">I considered prompt count when voting for images.</th><td><input type="radio" name="post-m2-considers_prompt_count" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-considers_prompt_count" value="disagree"></td><td><input type="radio" name="post-m2-considers_prompt_count" value="neutral"></td><td><input type="radio" name="post-m2-considers_prompt_count" value="agree"></td><td><input type="radio" name="post-m2-considers_prompt_count" value="strongly_agree"></td></tr>
+                                <tr><th scope="row" class="post-survey-m2-prompt">I considered total prompt word count when voting for images.</th><td><input type="radio" name="post-m2-considers_word_count" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-considers_word_count" value="disagree"></td><td><input type="radio" name="post-m2-considers_word_count" value="neutral"></td><td><input type="radio" name="post-m2-considers_word_count" value="agree"></td><td><input type="radio" name="post-m2-considers_word_count" value="strongly_agree"></td></tr>
+                                <tr><th scope="row" class="post-survey-m2-prompt">I considered prompt vocabulary variability when voting for images.</th><td><input type="radio" name="post-m2-considers_vocab_variability" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-considers_vocab_variability" value="disagree"></td><td><input type="radio" name="post-m2-considers_vocab_variability" value="neutral"></td><td><input type="radio" name="post-m2-considers_vocab_variability" value="agree"></td><td><input type="radio" name="post-m2-considers_vocab_variability" value="strongly_agree"></td></tr>
+                                <tr><th scope="row" class="post-survey-m2-prompt">I value AI generated images more when I believe they are not easily created.</th><td><input type="radio" name="post-m2-value_not_easily_created" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-value_not_easily_created" value="disagree"></td><td><input type="radio" name="post-m2-value_not_easily_created" value="neutral"></td><td><input type="radio" name="post-m2-value_not_easily_created" value="agree"></td><td><input type="radio" name="post-m2-value_not_easily_created" value="strongly_agree"></td></tr>
+                                <tr><th scope="row" class="post-survey-m2-prompt">A player who successfully recreated the target image in just one or two prompts better understands the AI model.</th><td><input type="radio" name="post-m2-few_prompts_better_understands" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-few_prompts_better_understands" value="disagree"></td><td><input type="radio" name="post-m2-few_prompts_better_understands" value="neutral"></td><td><input type="radio" name="post-m2-few_prompts_better_understands" value="agree"></td><td><input type="radio" name="post-m2-few_prompts_better_understands" value="strongly_agree"></td></tr>
+                                <tr><th scope="row" class="post-survey-m2-prompt">Requiring dozens of prompts to achieve a good result is a sign of poor prompt engineering skills.</th><td><input type="radio" name="post-m2-dozens_poor_engineering" value="strongly_disagree" required></td><td><input type="radio" name="post-m2-dozens_poor_engineering" value="disagree"></td><td><input type="radio" name="post-m2-dozens_poor_engineering" value="neutral"></td><td><input type="radio" name="post-m2-dozens_poor_engineering" value="agree"></td><td><input type="radio" name="post-m2-dozens_poor_engineering" value="strongly_agree"></td></tr>
+                            </tbody>
+                        </table>
+                    </fieldset>
+                    <fieldset class="post-survey-fieldset">
+                        <legend>AI images are more impressive if</legend>
+                        <p class="post-survey-stem">AI images are more impressive if:</p>
+                        <label class="post-survey-option-line"><input type="radio" name="post-impressive" value="without_ai" required> …I could make it without AI</label>
+                        <label class="post-survey-option-line"><input type="radio" name="post-impressive" value="without_ai_difficult"> …I could make it without AI with some difficulty</label>
+                        <label class="post-survey-option-line"><input type="radio" name="post-impressive" value="easily_with_ai"> …I could easily make it with AI</label>
+                        <label class="post-survey-option-line"><input type="radio" name="post-impressive" value="with_ai_difficult"> …I could make it with AI with some difficulty</label>
+                        <label class="post-survey-option-line"><input type="radio" name="post-impressive" value="dont_know"> …I don’t know how to make it at all</label>
+                    </fieldset>
+                    <fieldset class="lobby-survey-fieldset post-survey-fieldset">
+                        <legend>Open response 1</legend>
                         <p class="lobby-survey-prompt">What was your thought process when allocating points in voting?</p>
-                        <textarea id="post-free-q1" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                        <textarea id="post-free-q1" class="lobby-survey-textarea post-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
                     </fieldset>
-                    <fieldset class="lobby-survey-fieldset">
-                        <legend>2</legend>
+                    <fieldset class="lobby-survey-fieldset post-survey-fieldset">
+                        <legend>Open response 2</legend>
                         <p class="lobby-survey-prompt">How did you decide when to give an image more or less points than another image in the same round of voting?</p>
-                        <textarea id="post-free-q2" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                        <textarea id="post-free-q2" class="lobby-survey-textarea post-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
                     </fieldset>
-                    <fieldset class="lobby-survey-fieldset">
-                        <legend>3</legend>
+                    <fieldset class="lobby-survey-fieldset post-survey-fieldset">
+                        <legend>Open response 3</legend>
                         <p class="lobby-survey-prompt">During image creation, what information, if any, was displayed about your prompting?</p>
-                        <textarea id="post-free-q3" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                        <textarea id="post-free-q3" class="lobby-survey-textarea post-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
                     </fieldset>
-                    <fieldset class="lobby-survey-fieldset">
-                        <legend>4</legend>
+                    <fieldset class="lobby-survey-fieldset post-survey-fieldset">
+                        <legend>Open response 4</legend>
                         <p class="lobby-survey-prompt">On the voting screen, what information, if any, was displayed about the images?</p>
-                        <textarea id="post-free-q4" class="lobby-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
+                        <textarea id="post-free-q4" class="lobby-survey-textarea post-survey-textarea" rows="4" maxlength="2000" placeholder="Your answer (required)"></textarea>
                     </fieldset>
-                    <fieldset class="lobby-survey-fieldset">
-                        <legend>5</legend>
+                    <fieldset class="lobby-survey-fieldset post-survey-fieldset">
+                        <legend>Self evaluation 1</legend>
                         <p class="lobby-survey-prompt">The images I submitted for voting represented my best work:</p>
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="strongly_disagree"> Strongly Disagree</label>
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="disagree"> Disagree</label>
@@ -349,8 +411,8 @@
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="agree"> Agree</label>
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-best-work" value="strongly_agree"> Strongly Agree</label>
                     </fieldset>
-                    <fieldset class="lobby-survey-fieldset">
-                        <legend>6</legend>
+                    <fieldset class="lobby-survey-fieldset post-survey-fieldset">
+                        <legend>Self evaluation 2</legend>
                         <p class="lobby-survey-prompt">The images I submitted for voting represented significant effort on my part:</p>
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="strongly_disagree"> Strongly Disagree</label>
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="disagree"> Disagree</label>
@@ -358,6 +420,7 @@
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="agree"> Agree</label>
                         <label class="lobby-survey-option"><input type="radio" name="post-likert-effort" value="strongly_agree"> Strongly Agree</label>
                     </fieldset>
+
                     <p id="post-game-survey-error" class="lobby-survey-error" style="display: none;" role="alert"></p>
                     <button type="button" id="post-game-survey-submit-btn" class="btn btn-primary" disabled>Submit</button>
                 </div>

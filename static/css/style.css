@@ -186,9 +186,38 @@ body {
 }
 
 .post-game-survey-container {
-    max-width: 720px;
+    max-width: 960px;
     margin: 0 auto;
     text-align: left;
+    background: #1f1f23;
+    color: #ffffff;
+    padding: 24px 20px 32px;
+    border-radius: 12px;
+    box-sizing: border-box;
+}
+
+.post-game-survey-container,
+.post-game-survey-container h1,
+.post-game-survey-container h2,
+.post-game-survey-container h3,
+.post-game-survey-container p,
+.post-game-survey-container legend,
+.post-game-survey-container th,
+.post-game-survey-container td,
+.post-game-survey-container label,
+.post-game-survey-container .lobby-survey-prompt {
+    color: #ffffff;
+}
+
+.post-game-survey-container .lobby-survey-textarea,
+.post-game-survey-container .post-survey-textarea {
+    background: #2a2a30;
+    color: #ffffff;
+    border-color: #555;
+}
+
+.post-game-survey-container .lobby-survey-error {
+    color: #ffb4b4;
 }
 
 .post-game-survey-title-main {
@@ -198,8 +227,60 @@ body {
 
 .post-game-survey-intro {
     text-align: center;
-    color: #495057;
+    color: #ffffff;
     margin-bottom: 20px;
+}
+
+.post-survey-fieldset {
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    border-radius: 8px;
+    padding: 14px 16px 18px;
+    margin-bottom: 18px;
+}
+
+.post-survey-matrix-fieldset {
+    overflow-x: auto;
+}
+
+.post-survey-matrix-fieldset .post-survey-stem {
+    margin: 0 0 12px;
+    font-size: 1rem;
+}
+
+.post-survey-likert-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85rem;
+}
+
+.post-survey-likert-table th,
+.post-survey-likert-table td {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    padding: 8px 6px;
+    text-align: center;
+    vertical-align: middle;
+    color: #ffffff;
+}
+
+.post-survey-likert-table th[scope="row"],
+.post-survey-m2-prompt {
+    text-align: left;
+    font-weight: 500;
+    max-width: 280px;
+}
+
+.post-survey-likert-table-m2 .post-survey-m2-prompt {
+    max-width: 360px;
+}
+
+.post-survey-option-line {
+    display: block;
+    margin: 8px 0;
+    cursor: pointer;
+}
+
+.post-game-survey-container .lobby-survey-option {
+    color: #ffffff;
 }
 
 .gameover-post-survey-hint {
