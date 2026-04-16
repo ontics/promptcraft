@@ -1041,6 +1041,11 @@ body {
     flex-shrink: 0;
 }
 
+/* In the selection gallery, heuristic-box should not reserve fixed height (column layout). */
+.selection-heuristics-below.heuristic-box {
+    flex: none;
+}
+
 /* Voting Screen Layout */
 .voting-layout {
     display: grid;
@@ -1631,6 +1636,11 @@ body.image-context-bullets-enabled .selection-item .gameplay-image-context-bulle
     padding: 8px;
     background: #f8f9fa;
     line-height: 1.35;
+}
+
+/* Selection screen uses a column layout; don't reserve fixed height for the below-image heuristics box. */
+.selection-item .selection-heuristics-below.heuristic-box {
+    flex: none;
 }
 .heuristic-line .hl {
     font-weight: 600;

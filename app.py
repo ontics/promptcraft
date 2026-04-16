@@ -2739,11 +2739,13 @@ def _heuristic_snapshot_from_selected(player, prompt_round=3):
     prompt_index = sel.get('prompt_index') or 1
     prompt_text = sel.get('prompt') or ''
     elapsed = int(sel.get('prompt_sent_elapsed_seconds') or 0)
+    cond_sel = (player.get('condition') or '').strip().upper()
     return heur_mod.snapshot_for_image_entry(
         prompt_index=prompt_index,
         prompt_text=prompt_text,
         images_before_and_including=imgs,
         prompt_elapsed_seconds=elapsed,
+        cumulative_word_count_for_prompt_line=cond_sel in ('C_HU', 'T_HU'),
     )
 
 
