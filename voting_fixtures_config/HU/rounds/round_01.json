@@ -3,8 +3,8 @@
   "target_profile": "oski",
   "target_image": "/static/images/target1.jpg",
   "candidates": [
-    {"fixture_image_id": "hu01_a", "image": "options/slot_a.svg", "heuristics": {"number_of_prompts": 3, "total_word_count": 41, "time_in_round_seconds": 88}},
-    {"fixture_image_id": "hu01_b", "image": "options/slot_b.svg", "heuristics": {"number_of_prompts": 6, "total_word_count": 94, "time_in_round_seconds": 142}},
-    {"fixture_image_id": "hu01_c", "image": "options/slot_c.svg", "heuristics": {"number_of_prompts": 10, "total_word_count": 151, "time_in_round_seconds": 241}}
+    {"fixture_image_id": "hu01_a", "image": "images/A1.1.png", "heuristics": {"number_of_prompts": 3, "total_word_count": 41, "time_in_round_seconds": 88}},
+    {"fixture_image_id": "hu01_b", "image": "images/A1.2.png", "heuristics": {"number_of_prompts": 6, "total_word_count": 94, "time_in_round_seconds": 142}},
+    {"fixture_image_id": "hu01_c", "image": "images/A1.3.png", "heuristics": {"number_of_prompts": 10, "total_word_count": 151, "time_in_round_seconds": 241}}
   ]
 }
