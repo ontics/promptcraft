@@ -3,8 +3,8 @@
   "target_profile": "tree",
   "target_image": "/static/images/target2.jpg",
   "candidates": [
-    {"fixture_image_id": "hu05_a", "image": "options/slot_b.svg", "heuristics": {"number_of_prompts": 4, "total_word_count": 55, "time_in_round_seconds": 96}},
-    {"fixture_image_id": "hu05_b", "image": "options/slot_c.svg", "heuristics": {"number_of_prompts": 6, "total_word_count": 88, "time_in_round_seconds": 158}},
-    {"fixture_image_id": "hu05_c", "image": "options/slot_a.svg", "heuristics": {"number_of_prompts": 11, "total_word_count": 162, "time_in_round_seconds": 268}}
+    {"fixture_image_id": "hu05_a", "image": "images/B2.1.png", "heuristics": {"number_of_prompts": 4, "total_word_count": 55, "time_in_round_seconds": 96}},
+    {"fixture_image_id": "hu05_b", "image": "images/B2.2.png", "heuristics": {"number_of_prompts": 6, "total_word_count": 88, "time_in_round_seconds": 158}},
+    {"fixture_image_id": "hu05_c", "image": "images/B2.3.png", "heuristics": {"number_of_prompts": 11, "total_word_count": 162, "time_in_round_seconds": 268}}
   ]
 }

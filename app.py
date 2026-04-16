@@ -18,7 +18,7 @@ load_dotenv()
 
 import db  # Database helper module
 import heuristics as heur_mod
-from voting_fixtures import FIXTURE_ROUNDS, TOTAL_VOTING_ROUNDS, NUM_HARDCODED_VOTING_ROUNDS
+from voting_fixtures import get_fixture_rounds, TOTAL_VOTING_ROUNDS, NUM_HARDCODED_VOTING_ROUNDS
 
 # Allocation rounds 1–9: fixture JSON groups (target Oski / Tree / slug). See story per-player-randomized-allocation-fixture-order-1-9.
 _ALLOC_FIXTURE_GROUP_A = (1, 2, 3)
@@ -2700,7 +2700,7 @@ def _allocation_fixture_submit_key_for_ordinal(voter_sid: str, display_ordinal: 
     if not order or len(order) != NUM_HARDCODED_VOTING_ROUNDS:
         return None
     fixture_num = order[display_ordinal - 1]
-    fix = FIXTURE_ROUNDS[fixture_num - 1]
+    fix = get_fixture_rounds()[fixture_num - 1]
     return fix['fixture_set_key']
 
 
@@ -2811,7 +2811,7 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
             p['allocation_fixture_order'] = build_allocation_fixture_order()
             order = p['allocation_fixture_order']
         fixture_num = order[round_index - 1]
-        fix = FIXTURE_ROUNDS[fixture_num - 1]
+        fix = get_fixture_rounds()[fixture_num - 1]
         fixture_key = fix['fixture_set_key']
         target_url = fix['target_image_url']
 
