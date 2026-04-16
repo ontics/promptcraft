@@ -293,16 +293,13 @@ VALID_POST_SURVEY_LIKERT = frozenset(
     {'strongly_disagree', 'disagree', 'neutral', 'agree', 'strongly_agree'}
 )
 VALID_POST_SURVEY_MATRIX1 = frozenset({'far_less', 'somewhat_less', 'same', 'somewhat_more', 'far_more'})
-VALID_POST_SURVEY_IMPRESSIVE = frozenset(
-    {'without_ai', 'without_ai_difficult', 'easily_with_ai', 'with_ai_difficult', 'dont_know'}
-)
-POST_SURVEY_M1_STEMS = ('longer', 'more', 'vocab')
+POST_SURVEY_M1_STEMS = ('longer', 'more', 'time', 'vocab')
 POST_SURVEY_M1_ROWS = ('creative', 'precise', 'skilled', 'efficient')
 POST_SURVEY_M2_KEYS = (
     'visual_similarity',
     'considers_prompt_count',
     'considers_word_count',
-    'considers_vocab_variability',
+    'considers_time_spent',
     'value_not_easily_created',
     'few_prompts_better_understands',
     'dozens_poor_engineering',
@@ -324,7 +321,6 @@ def parse_post_survey_extended(data):
     payload = data or {}
     matrix1 = payload.get('matrix1') or {}
     matrix2 = payload.get('matrix2') or {}
-    impressive_if = payload.get('impressive_if')
     if not isinstance(matrix1, dict) or not isinstance(matrix2, dict):
         return None, 'Please answer every question before submitting.'
     for stem in POST_SURVEY_M1_STEMS:
@@ -337,9 +333,36 @@ def parse_post_survey_extended(data):
     for key in POST_SURVEY_M2_KEYS:
         if matrix2.get(key) not in VALID_POST_SURVEY_LIKERT:
             return None, 'Please answer every question before submitting.'
-    if impressive_if not in VALID_POST_SURVEY_IMPRESSIVE:
-        return None, 'Please answer every question before submitting.'
-    return {'matrix1': matrix1, 'matrix2': matrix2, 'impressive_if': impressive_if}, None
+    return {'matrix1': matrix1, 'matrix2': matrix2}, None
+
+
+def build_post_survey_behavior_snapshot(player):
+    """Attach compact gameplay behavior for UID-linked analysis with survey responses."""
+    images = player.get('images') or {}
+    per_round_prompt_counts = {}
+    prompt_count_total = 0
+    for round_num in (1, 2, 3):
+        cnt = len(images.get(round_num, []))
+        per_round_prompt_counts[str(round_num)] = cnt
+        prompt_count_total += cnt
+    return {
+        'player_id': player.get('session_id'),
+        'game_id': game_state.get('game_id'),
+        'condition': player.get('condition'),
+        'prompt_count_total': prompt_count_total,
+        'prompt_count_by_round': per_round_prompt_counts,
+        'selected_prompt_ids_by_round': {
+            str(round_num): (player.get('selected_images', {}).get(round_num, {}) or {}).get('prompt_id')
+            for round_num in (1, 2, 3)
+        },
+        'votes_received_by_round': {
+            str(round_num): int((player.get('votes_received', {}) or {}).get(round_num, 0))
+            for round_num in (1, 2, 3)
+        },
+        'round_scores': list(player.get('round_scores', []) or []),
+        'total_score': player.get('score'),
+        'incentive_points': player.get('incentive_points', 0),
+    }
 
 
 def open_post_survey_after_game_over(game_over_payload):
@@ -1367,6 +1390,7 @@ def handle_submit_post_game_survey(data):
     if extended_err:
         emit('error', {'message': extended_err})
         return
+    extended['behavior_snapshot'] = build_post_survey_behavior_snapshot(player)
     if db.is_configured():
         ok = db.update_player_post_survey(
             gid,
