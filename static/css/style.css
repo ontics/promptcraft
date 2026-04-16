@@ -233,13 +233,18 @@ body {
 
 .post-survey-fieldset {
     border: 1px solid rgba(255, 255, 255, 0.25);
-    border-radius: 8px;
-    padding: 14px 16px 18px;
-    margin-bottom: 18px;
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 16px;
 }
 
 .post-survey-matrix-fieldset {
     overflow-x: auto;
+}
+
+.post-survey-fieldset legend {
+    font-weight: 600;
+    padding: 0 6px;
 }
 
 .post-survey-stem {
@@ -1314,6 +1319,11 @@ body {
     font-weight: 600;
     padding: 0 6px;
     color: #343a40;
+}
+
+.post-game-survey-container .lobby-survey-fieldset legend,
+.post-game-survey-container .post-survey-fieldset legend {
+    color: #ffffff;
 }
 
 .lobby-survey-prompt {
