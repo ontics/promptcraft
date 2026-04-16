@@ -1772,7 +1772,7 @@ def handle_send_prompt(data):
             emit('error', {'message': 'Practice voting is in progress — prompts are closed.'})
             return
         if len(player['onboarding_images']) >= 3:
-            emit('error', {'message': 'Practice limit reached (3 prompts).'})
+            emit('error', {'message': 'Practice limit reached.'})
             return
     elif game_state['status'] != 'playing':
         emit('error', {'message': 'Game is not in playing state'})
