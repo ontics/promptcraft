@@ -228,7 +228,7 @@ body {
 }
 
 .post-game-survey-container .lobby-survey-error {
-    color: #ffb4b4;
+    color: #ffffff;
 }
 
 .post-survey-fieldset {
@@ -1206,6 +1206,28 @@ body {
 
 .final-result-item:last-child {
     border-bottom: none;
+}
+
+.final-result-item.self-result {
+    position: relative;
+    border: 2px solid #1c7ed6;
+    border-radius: 12px;
+    background: linear-gradient(135deg, #e7f5ff 0%, #f8fbff 100%);
+    box-shadow: 0 4px 14px rgba(28, 126, 214, 0.18);
+}
+
+.you-badge {
+    display: inline-block;
+    margin-left: 8px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    color: #ffffff;
+    background: #1c7ed6;
+    vertical-align: middle;
 }
 
 .podium-1 {

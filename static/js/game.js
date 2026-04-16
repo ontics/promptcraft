@@ -484,13 +484,13 @@ function syncStartPostSurveyButton() {
         : 'Open the post-game survey for everyone in this session. Requires at least one player and a started game with database records; you will see a message if it cannot run yet.';
 }
 
-const POST_SURVEY_M1_STEMS = ['longer', 'more', 'vocab'];
+const POST_SURVEY_M1_STEMS = ['longer', 'more', 'time', 'vocab'];
 const POST_SURVEY_M1_ROWS = ['creative', 'precise', 'skilled', 'efficient'];
 const POST_SURVEY_M2_KEYS = [
     'visual_similarity',
     'considers_prompt_count',
     'considers_word_count',
-    'considers_vocab_variability',
+    'considers_time_spent',
     'value_not_easily_created',
     'few_prompts_better_understands',
     'dozens_poor_engineering',
@@ -526,19 +526,29 @@ function isPostSurveyComplete() {
     const q4 = (document.getElementById('post-free-q4')?.value || '').trim();
     const l1 = document.querySelector('input[name="post-likert-best-work"]:checked');
     const l2 = document.querySelector('input[name="post-likert-effort"]:checked');
-    const impressive = document.querySelector('input[name="post-impressive"]:checked');
-    return Boolean(q1 && q2 && q3 && q4 && l1 && l2 && impressive && collectPostSurveyMatrix1() && collectPostSurveyMatrix2());
+    return Boolean(q1 && q2 && q3 && q4 && l1 && l2 && collectPostSurveyMatrix1() && collectPostSurveyMatrix2());
 }
 
 function renderGameOverContent(data) {
     const finalResults = document.getElementById('final-results');
     if (!finalResults || !data) return;
+    const selfName = (gameState.playerName || '').trim();
+    const isSelfResult = (resultName) => {
+        if (!selfName || !resultName) return false;
+        return String(resultName).trim().toLowerCase() === selfName.toLowerCase();
+    };
+    const renderResultName = (resultName) => {
+        const safeName = resultName || '';
+        if (!isSelfResult(safeName)) return safeName;
+        return `${safeName} <span class="you-badge" aria-label="This is you">You</span>`;
+    };
 
     if (data.experiment) {
         finalResults.innerHTML = '<h2>Game results</h2>';
         (data.results || []).forEach((result) => {
             const item = document.createElement('div');
             item.className = 'final-result-item experiment-rank';
+            if (isSelfResult(result.player_name)) item.classList.add('self-result');
             const r = result.rank || 1;
             let badge = String(r);
             if (r === 1) badge = '🥇';
@@ -546,7 +556,7 @@ function renderGameOverContent(data) {
             else if (r === 3) badge = '🥉';
             item.innerHTML = `
                 <div class="result-rank">${badge}</div>
-                <div class="result-info"><h3>${result.player_name}</h3></div>
+                <div class="result-info"><h3>${renderResultName(result.player_name)}</h3></div>
             `;
             finalResults.appendChild(item);
         });
@@ -557,6 +567,7 @@ function renderGameOverContent(data) {
     (data.results || []).forEach((result, index) => {
         const item = document.createElement('div');
         item.className = 'final-result-item';
+        if (isSelfResult(result.player_name)) item.classList.add('self-result');
 
         if (index === 0) item.classList.add('podium-1');
         else if (index === 1) item.classList.add('podium-2');
@@ -572,7 +583,7 @@ function renderGameOverContent(data) {
         item.innerHTML = `
             <div class="result-rank">${rankEmoji}</div>
             <div class="result-info">
-                <h3>${result.player_name}</h3>
+                <h3>${renderResultName(result.player_name)}</h3>
                 <p>Round Scores: ${roundScores}</p>
             </div>
             <div class="result-score">${result.total_score ?? ''}</div>
@@ -637,10 +648,9 @@ function initPostGameSurveyListeners() {
         const likert_effort = document.querySelector('input[name="post-likert-effort"]:checked')?.value;
         const matrix1 = collectPostSurveyMatrix1();
         const matrix2 = collectPostSurveyMatrix2();
-        const impressive_if = document.querySelector('input[name="post-impressive"]:checked')?.value;
         if (
             !free_q1 || !free_q2 || !free_q3 || !free_q4 ||
-            !likert_best_work || !likert_effort || !matrix1 || !matrix2 || !impressive_if
+            !likert_best_work || !likert_effort || !matrix1 || !matrix2
         ) {
             if (err) {
                 err.textContent = 'Please answer every question before submitting.';
@@ -657,7 +667,6 @@ function initPostGameSurveyListeners() {
             likert_effort,
             matrix1,
             matrix2,
-            impressive_if,
         });
     });
     document.getElementById('post-game-survey-back-btn')?.addEventListener('click', () => {
