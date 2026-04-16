@@ -533,12 +533,23 @@ function isPostSurveyComplete() {
 function renderGameOverContent(data) {
     const finalResults = document.getElementById('final-results');
     if (!finalResults || !data) return;
+    const selfName = (gameState.playerName || '').trim();
+    const isSelfResult = (resultName) => {
+        if (!selfName || !resultName) return false;
+        return String(resultName).trim().toLowerCase() === selfName.toLowerCase();
+    };
+    const renderResultName = (resultName) => {
+        const safeName = resultName || '';
+        if (!isSelfResult(safeName)) return safeName;
+        return `${safeName} <span class="you-badge" aria-label="This is you">You</span>`;
+    };
 
     if (data.experiment) {
         finalResults.innerHTML = '<h2>Game results</h2>';
         (data.results || []).forEach((result) => {
             const item = document.createElement('div');
             item.className = 'final-result-item experiment-rank';
+            if (isSelfResult(result.player_name)) item.classList.add('self-result');
             const r = result.rank || 1;
             let badge = String(r);
             if (r === 1) badge = '🥇';
@@ -546,7 +557,7 @@ function renderGameOverContent(data) {
             else if (r === 3) badge = '🥉';
             item.innerHTML = `
                 <div class="result-rank">${badge}</div>
-                <div class="result-info"><h3>${result.player_name}</h3></div>
+                <div class="result-info"><h3>${renderResultName(result.player_name)}</h3></div>
             `;
             finalResults.appendChild(item);
         });
@@ -557,6 +568,7 @@ function renderGameOverContent(data) {
     (data.results || []).forEach((result, index) => {
         const item = document.createElement('div');
         item.className = 'final-result-item';
+        if (isSelfResult(result.player_name)) item.classList.add('self-result');
 
         if (index === 0) item.classList.add('podium-1');
         else if (index === 1) item.classList.add('podium-2');
@@ -572,7 +584,7 @@ function renderGameOverContent(data) {
         item.innerHTML = `
             <div class="result-rank">${rankEmoji}</div>
             <div class="result-info">
-                <h3>${result.player_name}</h3>
+                <h3>${renderResultName(result.player_name)}</h3>
                 <p>Round Scores: ${roundScores}</p>
             </div>
             <div class="result-score">${result.total_score ?? ''}</div>
