@@ -535,6 +535,7 @@ def admin_player_status_row_with_round(p):
     row = {
         **admin_lobby_player_row(p),
         'prompts_submitted': len(p['images'].get(cr, [])) if include_game_state else 0,
+        'round10_points': int(p.get('incentive_points', 0) or 0),
         'has_selected': (
             (cr in p['selected_images'])
             if include_game_state and st in ['voting', 'voting_images']

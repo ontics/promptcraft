@@ -1404,6 +1404,7 @@ function updateAdminPlayerList(players) {
         const selectionStatus = player.has_selected !== undefined ? (player.has_selected ? '✓ Selected' : '⏳ Selecting') : '';
         const voteStatus = player.has_voted !== undefined ? (player.has_voted ? '✓ Voted' : '⏳ Voting') : '';
         const scoreText = player.score !== undefined ? `Score: ${player.score}` : '';
+        const round10Points = Number.isFinite(Number(player.round10_points)) ? Number(player.round10_points) : 0;
         
         // Create left side with player info
         const leftDiv = document.createElement('div');
@@ -1514,6 +1515,7 @@ function updateAdminPlayerList(players) {
             <small style="color: ${statusColor}">${statusText}</small>
             ${phaseBadge}
             <br><small class="prompts-count">Prompts: ${promptsSubmitted}</small>
+            <br><small style="color: #0b7285; font-weight: 600;">Round 10 points earned: ${round10Points}</small>
             ${selectionStatus ? `<br><small>${selectionStatus}</small>` : ''}
             ${voteStatus ? `<br><small>${voteStatus}</small>` : ''}
         `;
