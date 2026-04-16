@@ -121,7 +121,7 @@ function applyOnboardingGenerateState() {
         }
         if (hint) {
             hint.style.display = 'block';
-            hint.textContent = `Practice limit reached (${max} prompts).`;
+            hint.textContent = 'Practice limit reached.';
         }
     } else {
         if (input) {
@@ -2693,7 +2693,7 @@ socket.on('allocation_vote_started', (data) => {
     syncAllocationVotingHeaderAlias();
     gameState.allocationRoundIndex = data.voting_round_index || 1;
     const ins = document.getElementById('allocation-instructions');
-    if (ins) ins.textContent = 'Distribute points among the following images';
+    if (ins) ins.textContent = 'Distribute 10 points among the following images';
     const rn = document.getElementById('allocation-round-num');
     const rt = document.getElementById('allocation-round-total');
     if (rn) rn.textContent = String(data.voting_round_index || 1);
