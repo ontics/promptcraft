@@ -455,9 +455,12 @@ def gamemaster_can_start_post_survey():
 def admin_joined_payload():
     return {
         'is_admin': True,
-        'players': [admin_lobby_player_row(p) for p in players.values()],
+        'players': [admin_player_status_row_with_round(p) for p in players.values()],
         'post_survey_active': bool(game_state.get('post_survey_active')),
         'can_start_post_survey': gamemaster_can_start_post_survey(),
+        'game_status': game_state['status'],
+        'current_round': game_state.get('current_round', 0),
+        'onboarding_phase': game_state.get('onboarding_phase') if game_state['status'] == 'onboarding' else None,
     }
 
 
@@ -466,6 +469,9 @@ def admin_player_status_payload():
         'players': [admin_player_status_row_with_round(p) for p in players.values()],
         'post_survey_active': bool(game_state.get('post_survey_active')),
         'can_start_post_survey': gamemaster_can_start_post_survey(),
+        'game_status': game_state['status'],
+        'current_round': game_state.get('current_round', 0),
+        'onboarding_phase': game_state.get('onboarding_phase') if game_state['status'] == 'onboarding' else None,
     }
 
 
@@ -500,6 +506,9 @@ def admin_player_status_row_with_round(p):
             else None
         ),
     }
+    if st == 'allocation_voting' and not p.get('is_admin'):
+        row['allocation_voting_round'] = p.get('allocation_player_round')
+        row['allocation_voting_total'] = TOTAL_VOTING_ROUNDS
     return row
 
 
@@ -823,6 +832,12 @@ def handle_join_game(data):
                             },
                             room=player['socket_id'],
                         )
+                elif game_state['status'] == 'allocation_voting':
+                    socketio.emit(
+                        'admin_allocation_started',
+                        {'allocation_async': True, 'total': TOTAL_VOTING_ROUNDS},
+                        room=player['socket_id'],
+                    )
                 elif game_state['status'] in ['voting', 'voting_images', 'round_results']:
                     # Send current admin status
                     handle_admin_get_status()
@@ -2762,9 +2777,10 @@ def start_allocation_voting_phase() -> None:
         )
 
     for p in non_admin:
+        p['allocation_player_round'] = 1
+    for p in non_admin:
         if not p.get('socket_id'):
             continue
-        p['allocation_player_round'] = 1
         emit_allocation_round_for_player(p['session_id'], 1)
 
     if admin_session_id in players and players[admin_session_id].get('socket_id'):
@@ -2773,6 +2789,7 @@ def start_allocation_voting_phase() -> None:
             {'allocation_async': True, 'total': TOTAL_VOTING_ROUNDS},
             room=players[admin_session_id]['socket_id'],
         )
+    notify_admin_player_list()
 
 
 def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
@@ -3682,6 +3699,7 @@ def handle_submit_point_allocation(data):
             'player_name': players[session_id].get('display_name', players[session_id]['name']),
             'round': ri,
         }, room=players[admin_session_id]['socket_id'])
+    notify_admin_player_list()
 
 
 @socketio.on('cast_vote')
