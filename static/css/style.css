@@ -276,6 +276,22 @@ body {
     margin: 8px 0;
 }
 
+.post-survey-waiting-container {
+    max-width: 640px;
+    margin: 0 auto;
+    text-align: center;
+    background: #1f1f23;
+    color: #ffffff;
+    border-radius: 12px;
+    padding: 28px 20px;
+}
+
+#post-survey-waiting-message {
+    color: #ffffff;
+    margin-top: 10px;
+    margin-bottom: 16px;
+}
+
 .gameover-post-survey-hint {
     text-align: center;
     color: #495057;

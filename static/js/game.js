@@ -190,6 +190,7 @@ const screens = {
     results: document.getElementById('results-screen'),
     gameover: document.getElementById('gameover-screen'),
     postGameSurvey: document.getElementById('post-game-survey-screen'),
+    postSurveyWaiting: document.getElementById('post-survey-waiting-screen'),
 };
 
 /** Gamemaster Round Controls: full buttons for live play; onboarding prompting shows End Round only. */
@@ -887,6 +888,8 @@ socket.on('game_joined', (data) => {
         if (!gameState.isAdmin && gameState.pendingGameOver && gameState.postSurveyCompleted) {
             renderGameOverContent(gameState.pendingGameOver);
             showScreen('gameover');
+        } else if (!gameState.isAdmin && gameState.postSurveyActive && gameState.postSurveyCompleted) {
+            showScreen('postSurveyWaiting');
         } else if (!gameState.isAdmin && gameState.postSurveyActive && !gameState.postSurveyCompleted) {
             resetPostGameSurveyForm();
             showScreen('postGameSurvey');
@@ -1111,7 +1114,15 @@ socket.on('post_survey_started', (data) => {
     if (data && data.game_over) {
         gameState.pendingGameOver = data.game_over;
     }
-    if (gameState.postSurveyCompleted) return;
+    if (gameState.postSurveyCompleted) {
+        if (gameState.pendingGameOver) {
+            renderGameOverContent(gameState.pendingGameOver);
+            showScreen('gameover');
+        } else {
+            showScreen('postSurveyWaiting');
+        }
+        return;
+    }
     const hintGo = document.getElementById('gameover-post-survey-hint');
     if (hintGo) hintGo.style.display = 'none';
     resetPostGameSurveyForm();
@@ -1132,10 +1143,7 @@ socket.on('post_game_survey_saved', (data) => {
         showScreen('gameover');
         return;
     }
-    const wrap = document.getElementById('post-game-survey-form-wrap');
-    const done = document.getElementById('post-game-survey-done');
-    if (wrap) wrap.style.display = 'none';
-    if (done) done.style.display = 'block';
+    showScreen('postSurveyWaiting');
 });
 
 // Note: admin_status handler removed - we no longer poll for status updates
@@ -2910,6 +2918,7 @@ socket.on('game_over', (data) => {
     if (gameState.isAdmin) {
         return;
     }
+    gameState.postSurveyActive = false;
     showScreen('gameover');
 
     const hintGo = document.getElementById('gameover-post-survey-hint');

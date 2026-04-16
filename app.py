@@ -384,6 +384,23 @@ def open_post_survey_after_game_over(game_over_payload):
     notify_admin_player_list()
 
 
+def open_post_survey_for_player(player):
+    """Open post survey immediately for one non-admin player once they finish voting."""
+    if not player or player.get('is_admin'):
+        return
+    ensure_post_survey_fields(player)
+    hydrate_post_survey_from_db(player)
+    sock = player.get('socket_id')
+    if not sock:
+        return
+    if player.get('post_survey_completed'):
+        payload = game_state.get('last_game_over_payload')
+        if payload:
+            socketio.emit('game_over', payload, room=sock)
+        return
+    socketio.emit('post_survey_started', {'game_over': game_state.get('last_game_over_payload')}, room=sock)
+
+
 def hydrate_post_survey_from_db(player):
     """If this player already submitted post-survey for current game, set completed flag."""
     if not db.is_configured():
@@ -3041,6 +3058,7 @@ def _after_allocation_submit_emit(voter_sid: str, completed_round: int) -> None:
         emit_allocation_round_for_player(voter_sid, completed_round + 1)
     else:
         pl['allocation_player_round'] = TOTAL_VOTING_ROUNDS + 1
+        game_state['post_survey_active'] = True
         if sock:
             socketio.emit(
                 'allocation_saved',
@@ -3052,6 +3070,7 @@ def _after_allocation_submit_emit(voter_sid: str, completed_round: int) -> None:
                 },
                 room=sock,
             )
+        open_post_survey_for_player(pl)
         if _all_players_finished_allocation():
             finish_experiment_final_ranking()
 
