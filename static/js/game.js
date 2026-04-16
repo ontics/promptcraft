@@ -86,6 +86,8 @@ let gameState = {
     imageContextBulletsEnabled: false,
     /** Server-authoritative allocation voting round index while on #voting-screen. */
     allocationRoundIndex: 1,
+    /** True while game_state.status is allocation_voting (admin dashboard context). */
+    inAllocationVoting: false,
     postSurveyCompleted: false,
     postSurveyActive: false,
     canStartPostSurvey: false,
@@ -891,10 +893,14 @@ socket.on('game_joined', (data) => {
 socket.on('admin_joined', (data) => {
     console.log('admin_joined event received:', data);
     gameState.isAdmin = true;
-    gameState.currentRound = 0;
-    gameState.inOnboarding = false;
-    gameState.onboardingPhase = 'prompting';
     applyPostSurveyFlagsFromServer(data);
+    syncGameStateFromAdminDashboardPayload(data);
+    if (data.game_status == null) {
+        gameState.currentRound = 0;
+        gameState.inOnboarding = false;
+        gameState.onboardingPhase = 'prompting';
+        gameState.inAllocationVoting = false;
+    }
 
     // Lobby holds admin chrome (e.g. Restart Game). Show it even if we were mid-game (recovery).
     showScreen('lobby');
@@ -935,6 +941,7 @@ socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
 
     gameState.inOnboarding = false;
+    gameState.inAllocationVoting = false;
     gameState.currentRound = data.round != null ? data.round : 1;
 
     // Ensure admin screen is visible
@@ -978,6 +985,7 @@ socket.on('admin_game_started', (data) => {
 
 socket.on('admin_onboarding_started', (data) => {
     gameState.inOnboarding = true;
+    gameState.inAllocationVoting = false;
     gameState.onboardingPhase = data.onboarding_phase === 'practice_voting' ? 'practice_voting' : 'prompting';
     gameState.currentRound = 0;
     gameState.roundEndTime = null;
@@ -1011,10 +1019,26 @@ socket.on('admin_onboarding_started', (data) => {
 socket.on('admin_onboarding_practice_voting', () => {
     if (!gameState.isAdmin) return;
     gameState.inOnboarding = true;
+    gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'practice_voting';
     setAdminRoundControlsForContext();
     const st = document.getElementById('admin-status');
     if (st) st.textContent = 'Onboarding (practice voting)';
+});
+
+socket.on('admin_allocation_started', (data) => {
+    if (!gameState.isAdmin) return;
+    gameState.inAllocationVoting = true;
+    const st = document.getElementById('admin-status');
+    if (st) st.textContent = 'Allocation voting';
+    const ar = document.getElementById('admin-round');
+    if (ar) ar.textContent = data && data.total ? String(data.total) : '10';
+    const timeEl = document.getElementById('admin-time-remaining');
+    if (timeEl) timeEl.textContent = '—';
+    if (adminTimerInterval) {
+        clearInterval(adminTimerInterval);
+        adminTimerInterval = null;
+    }
 });
 
 socket.on('admin_voting_started', (data) => {
@@ -1026,6 +1050,7 @@ socket.on('admin_voting_started', (data) => {
         adminScreen.style.display = 'block';
     }
     gameState.inOnboarding = false;
+    gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'prompting';
     setAdminRoundControlsForContext();
     
@@ -1063,6 +1088,7 @@ socket.on('player_status_update', (data) => {
     }
     applyPostSurveyFlagsFromServer(data);
     if (gameState.isAdmin) {
+        syncGameStateFromAdminDashboardPayload(data);
         updateAdminPlayerList(data.players);
         syncStartPostSurveyButton();
     } else {
@@ -1159,6 +1185,26 @@ function startAdminTimeCalculation() {
 }
 
 let adminTimerInterval = null;
+
+/** Apply server game phase fields included on admin_joined / player_status_update payloads. */
+function syncGameStateFromAdminDashboardPayload(data) {
+    if (!data || typeof data !== 'object') return;
+    if (data.game_status != null) {
+        gameState.inAllocationVoting = data.game_status === 'allocation_voting';
+    }
+    if (data.current_round !== undefined && data.current_round !== null) {
+        gameState.currentRound = data.current_round;
+    }
+    if (data.game_status === 'onboarding') {
+        gameState.inOnboarding = true;
+        if (data.onboarding_phase === 'practice_voting' || data.onboarding_phase === 'prompting') {
+            gameState.onboardingPhase = data.onboarding_phase;
+        }
+    } else if (data.game_status != null && data.game_status !== 'onboarding') {
+        gameState.inOnboarding = false;
+        gameState.onboardingPhase = 'prompting';
+    }
+}
 
 socket.on('player_prompt_updated', (data) => {
     // Update real-time prompts count in admin dashboard
@@ -1274,9 +1320,9 @@ function updateAdminPlayerList(players) {
     
     adminPlayerList.innerHTML = '<h3>Players</h3>';
     
-    const isInLobby = gameState.currentRound === 0 && !gameState.inOnboarding;
+    const isInLobby = gameState.currentRound === 0 && !gameState.inOnboarding && !gameState.inAllocationVoting;
     // Team dropdown + remove player: lobby, or onboarding practice (not live rounds)
-    const showTeamAndRosterControls = gameState.currentRound === 0 || gameState.inOnboarding;
+    const showTeamAndRosterControls = (gameState.currentRound === 0 || gameState.inOnboarding) && !gameState.inAllocationVoting;
 
     const connectedCount = players.filter((p) => !p.is_admin && p.is_connected).length;
     const disconnectedCount = players.filter((p) => !p.is_admin && !p.is_connected).length;
@@ -1414,7 +1460,17 @@ function updateAdminPlayerList(players) {
         // Status and info
         let phaseBadge = '';
         if (!player.is_admin) {
-            if (isInLobby) {
+            if (player.allocation_voting_total != null && player.allocation_voting_total > 0) {
+                const t = player.allocation_voting_total;
+                const r = player.allocation_voting_round;
+                if (r == null) {
+                    phaseBadge = `<br><small style="color: #868e96; font-weight: 600;">Allocation voting: — / ${t}</small>`;
+                } else if (r > t) {
+                    phaseBadge = `<br><small style="color: #0b7285; font-weight: 600;">✓ Allocation complete (${t}/${t}) — waiting for others if needed</small>`;
+                } else {
+                    phaseBadge = `<br><small style="color: #0b7285; font-weight: 600;">Allocation voting: round ${r} / ${t}</small>`;
+                }
+            } else if (isInLobby) {
                 const preSmall = `<small style="color: ${player.survey_completed === true ? '#2b8a3e' : '#868e96'}; font-weight: 600;">${player.survey_completed === true ? 'Pre-survey completed' : 'Pre-survey'}</small>`;
                 const parts = [preSmall];
                 if (gameState.postSurveyActive || player.post_survey_completed === true) {
@@ -2861,6 +2917,7 @@ socket.on('game_restarted', (data) => {
     // Reset state
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
