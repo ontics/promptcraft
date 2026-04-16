@@ -2293,11 +2293,8 @@ function addImageToSelectionGallery(imgData, index) {
         imgData.prompt_index != null ? ` data-prompt-index="${String(imgData.prompt_index)}"` : '';
 
     let heurBelow = '';
-    if (
-        showTreatmentSelectionHeuristics() &&
-        Array.isArray(imgData.per_image_heuristic_display) &&
-        imgData.per_image_heuristic_display.length
-    ) {
+    const isTreatment = showTreatmentSelectionHeuristics() || imgData.show_prompting_heuristics === true;
+    if (isTreatment && Array.isArray(imgData.per_image_heuristic_display) && imgData.per_image_heuristic_display.length) {
         heurBelow = `<div class="selection-heuristics-below heuristic-box">${buildHeuristicLinesHtml(
             imgData.per_image_heuristic_display,
         )}</div>`;

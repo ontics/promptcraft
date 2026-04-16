@@ -2206,11 +2206,12 @@ def handle_send_prompt(data):
         # Otherwise, if prompt B returns before prompt A, the UI placeholders can be filled in swapped order.
         prompt_index = int(opc)
 
+        # Timestamp heuristic should reflect when the player submitted the prompt (not when the image returned).
         prompt_elapsed = 0
         if not is_onboarding:
             rs = game_state.get('round_start_time')
             if rs:
-                prompt_elapsed = int(max(0, min(300, time.time() - rs)))
+                prompt_elapsed = int(max(0, min(300, prompt_sent_ts - rs)))
 
         image_entry = {
             'prompt': prompt,
