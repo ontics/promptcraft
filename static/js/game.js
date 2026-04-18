@@ -98,6 +98,14 @@ let gameState = {
 };
 
 let timerInterval;
+let interRoundCountdownInterval = null;
+
+function clearInterRoundCountdownInterval() {
+    if (interRoundCountdownInterval != null) {
+        clearInterval(interRoundCountdownInterval);
+        interRoundCountdownInterval = null;
+    }
+}
 
 function syncImageContextBulletsVisibility() {
     const enabled = Boolean(gameState.imageContextBulletsEnabled) && !gameState.inOnboarding;
@@ -189,6 +197,7 @@ const screens = {
     onboardingPracticeVoting: document.getElementById('onboarding-practice-voting-screen'),
     transition: document.getElementById('transition-screen'),
     selection: document.getElementById('selection-screen'),
+    interRoundCountdown: document.getElementById('inter-round-countdown-screen'),
     voting: document.getElementById('voting-screen'),
     results: document.getElementById('results-screen'),
     gameover: document.getElementById('gameover-screen'),
@@ -967,6 +976,7 @@ socket.on('admin_replaced', (data) => {
 socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
 
+    clearInterRoundCountdownInterval();
     gameState.inOnboarding = false;
     gameState.inAllocationVoting = false;
     gameState.currentRound = data.round != null ? data.round : 1;
@@ -1811,6 +1821,7 @@ socket.on('game_started', (data) => {
         return;
     }
 
+    clearInterRoundCountdownInterval();
     gameState.inOnboarding = false;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
@@ -2581,6 +2592,29 @@ socket.on('voting_started', (data) => {
     // Start selection timer
     // Use synchronized start time from server for timer synchronization
     startSelectionTimer(data.duration || 90, data.start_time);
+});
+
+socket.on('inter_round_countdown', () => {
+    clearInterRoundCountdownInterval();
+
+    const selTimerEl = document.getElementById('selection-timer');
+    if (selTimerEl && selTimerEl.timerInterval) {
+        clearInterval(selTimerEl.timerInterval);
+        selTimerEl.timerInterval = null;
+    }
+
+    const numEl = document.getElementById('inter-round-countdown-number');
+    if (numEl) numEl.textContent = '5';
+    showScreen('interRoundCountdown');
+
+    let n = 5;
+    interRoundCountdownInterval = setInterval(() => {
+        n -= 1;
+        if (numEl && n >= 1) numEl.textContent = String(n);
+        if (n < 1) {
+            clearInterRoundCountdownInterval();
+        }
+    }, 1000);
 });
 
 socket.on('selection_waiting', (data) => {
