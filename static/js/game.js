@@ -3364,15 +3364,17 @@ socket.on('return_to_lobby', (data) => {
 
 // Duplicate function removed - using the one defined earlier
 
-// Auto-refresh timer periodically - check for both game screen and transition screen
+// Auto-refresh timer periodically - game, transition, and image selection phases
 setInterval(() => {
     const transitionScreen = document.getElementById('transition-screen');
     const isOnTransition = transitionScreen && transitionScreen.classList.contains('active');
     const isOnGame = screens.game && screens.game.classList.contains('active');
-    
-    // Check timer for both game screen and transition screen
-    // This ensures transition screen progresses automatically
-    if (gameState.currentRound > 0 && (isOnGame || isOnTransition)) {
+    const isOnSelection = screens.selection && screens.selection.classList.contains('active');
+
+    // Include selection: server must see time_elapsed >= duration for full 90s + inter-round countdown.
+    // A single check_selection_status at timer 0 can run slightly before server 90s (skew); without
+    // round_timer_check here, nothing would re-trigger until another client fired.
+    if (gameState.currentRound > 0 && (isOnGame || isOnTransition || isOnSelection)) {
         socket.emit('round_timer_check');
     }
 }, 1000); // Check every 1 second for better responsiveness during transition
