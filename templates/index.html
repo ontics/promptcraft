@@ -16,13 +16,16 @@
                 <p class="subtitle">Compete to create AI images that match the target!</p>
 
                 <div class="lobby-content">
-                    <div class="player-input">
-                        <button id="join-btn" class="btn btn-primary">Join Game</button>
-                    </div>
-
                     <div class="lobby-grid">
-                        <!-- Left: Lobby / Players -->
+                        <!-- Left: Join + lobby / players (join row matches card / list width) -->
                         <div class="lobby-wrapper card">
+                            <div class="lobby-join-row">
+                                <label class="seat-number-label" for="seat-number-input">Seat Number</label>
+                                <div class="lobby-join-actions">
+                                    <input type="text" id="seat-number-input" class="seat-number-input" inputmode="numeric" autocomplete="off" maxlength="40" placeholder="Digits only" aria-label="Seat number (required to join as a player)" />
+                                    <button id="join-btn" class="btn btn-primary lobby-join-btn">Join Game</button>
+                                </div>
+                            </div>
                             <div class="lobby-info">
                                 <p>Players in lobby: <span id="lobby-count">0</span></p>
                                 <p id="current-alias" class="current-alias" style="display: none; margin-top: 4px; font-size: 0.95rem;"></p>
@@ -79,9 +82,37 @@
         </div>
         
         <!-- Admin Gamemaster Screen (always available, shown when admin) -->
-        <div id="admin-screen" class="admin-wrapper card" style="display: none; position: fixed; top: 20px; right: 20px; width: 350px; max-height: 90vh; overflow-y: auto; z-index: 1000; background: white; box-shadow: 0 4px 20px rgba(0,0,0,0.3);">
-            <h2>🎮 Gamemaster Dashboard</h2>
-            <div id="admin-player-list" class="admin-player-list"></div>
+        <div id="admin-screen" class="admin-wrapper card admin-screen-panel" style="display: none;">
+            <div class="admin-dashboard-stack">
+                <h2>🎮 Gamemaster Dashboard</h2>
+                <details class="admin-filters-accordion">
+                    <summary class="admin-filters-accordion-summary">Sort &amp; filter players</summary>
+                    <div class="admin-dashboard-toolbar" id="admin-dashboard-toolbar">
+                        <label class="admin-filter-label">Sort by
+                            <select id="admin-sort-by" class="admin-filter-select">
+                                <option value="seat">Seat number</option>
+                                <option value="condition">Treatment group</option>
+                                <option value="round10">Round 10 points</option>
+                            </select>
+                        </label>
+                        <label class="admin-filter-label">Order
+                            <select id="admin-sort-dir" class="admin-filter-select">
+                                <option value="asc">Ascending</option>
+                                <option value="desc">Descending</option>
+                            </select>
+                        </label>
+                        <label class="admin-filter-label">Group filter
+                            <select id="admin-filter-treatment" class="admin-filter-select">
+                                <option value="">All groups</option>
+                            </select>
+                        </label>
+                    </div>
+                </details>
+                <div id="admin-dashboard-summary" class="admin-dashboard-summary"></div>
+            </div>
+            <div class="admin-player-list-scroll">
+                <div id="admin-player-list" class="admin-player-list"></div>
+            </div>
             <div id="admin-game-controls" style="display: none;">
                 <div class="admin-controls-group">
                     <h3>Round Controls</h3>
