@@ -81,9 +81,12 @@ NEXT_ROUND_SOON_MESSAGE = (
     'Next round will start soon. Please wait for the Gamemaster to continue.'
 )
 
+# After R3 image selection; players wait until Gamemaster starts voting.
+READY_TO_VOTE_MESSAGE = 'Voting will start soon. Please wait for the Gamemaster to continue.'
+
 # Game state
 game_state = {
-    'status': 'lobby',  # lobby, onboarding, playing, transitioning, voting, awaiting_next_prompting, voting_prep, allocation_voting, round_results, game_over
+    'status': 'lobby',  # lobby, onboarding, playing, transitioning, voting, awaiting_next_prompting, awaiting_voting_start, voting_prep, allocation_voting, round_results, game_over
     'current_round': 0,
     'round_start_time': None,
     'round_end_time': None,
@@ -567,7 +570,7 @@ def admin_player_status_row_with_round(p):
         'round10_points': int(p.get('incentive_points', 0) or 0),
         'has_selected': (
             (cr in p['selected_images'])
-            if include_game_state and st in ['voting', 'voting_images', 'awaiting_next_prompting']
+            if include_game_state and st in ['voting', 'voting_images', 'awaiting_next_prompting', 'awaiting_voting_start']
             else None
         ),
         'has_voted': (
@@ -917,6 +920,15 @@ def handle_join_game(data):
                         },
                         room=player['socket_id'],
                     )
+                elif game_state['status'] == 'awaiting_voting_start':
+                    socketio.emit(
+                        'admin_awaiting_voting_start',
+                        {
+                            'current_round': game_state['current_round'],
+                            'game_status': 'awaiting_voting_start',
+                        },
+                        room=player['socket_id'],
+                    )
                 elif game_state['status'] == 'allocation_voting':
                     socketio.emit(
                         'admin_allocation_started',
@@ -1077,6 +1089,15 @@ def handle_join_game(data):
                         'show_transition_screen',
                         {
                             'message': NEXT_ROUND_SOON_MESSAGE,
+                            'wait_for_admin': True,
+                        },
+                        room=player['socket_id'],
+                    )
+                elif game_state['status'] == 'awaiting_voting_start':
+                    socketio.emit(
+                        'show_transition_screen',
+                        {
+                            'message': READY_TO_VOTE_MESSAGE,
                             'wait_for_admin': True,
                         },
                         room=player['socket_id'],
@@ -2757,6 +2778,31 @@ def enter_awaiting_next_prompting_after_selection():
     notify_admin_player_list()
 
 
+def enter_awaiting_voting_start_after_round_three_selection():
+    """R3: selection is done; show interstitial until Gamemaster uses Start Voting."""
+    if game_state['status'] != 'voting':
+        return
+    if game_state['current_round'] != 3:
+        return
+    game_state['status'] = 'awaiting_voting_start'
+    print("[SELECTION] Entering awaiting_voting_start after round 3 selection")
+    for p in players.values():
+        if p['is_admin']:
+            continue
+        sid = p.get('socket_id')
+        if not sid:
+            continue
+        socketio.emit(
+            'show_transition_screen',
+            {
+                'message': READY_TO_VOTE_MESSAGE,
+                'wait_for_admin': True,
+            },
+            room=sid,
+        )
+    notify_admin_player_list()
+
+
 def advance_to_next_prompting_round_after_selection():
     """After selection phase of round 1 or 2, start the next 5-minute prompting round."""
     if game_state['current_round'] >= 3:
@@ -3233,6 +3279,8 @@ def handle_round_timer_check():
 
     if game_state['status'] == 'awaiting_next_prompting':
         return
+    if game_state['status'] == 'awaiting_voting_start':
+        return
 
     if game_state['status'] == 'onboarding':
         return
@@ -3636,8 +3684,8 @@ def force_finish_image_selection_phase():
         print(f"[ADMIN] Forcing selection complete — awaiting Gamemaster for prompting round {current_round + 1}")
         enter_awaiting_next_prompting_after_selection()
     else:
-        print('[ADMIN] Forcing selection complete — starting post-round-3 allocation prep')
-        start_post_round_three_voting_buffer()
+        print('[ADMIN] Forcing selection complete — awaiting Gamemaster to start voting')
+        enter_awaiting_voting_start_after_round_three_selection()
     return True
 
 
@@ -3709,8 +3757,8 @@ def check_all_selected():
                     f"(likely another request entered the Gamemaster gate first)"
                 )
         else:
-            print(f"[SELECTION] Round 3 selection complete — starting voting prep buffer")
-            start_post_round_three_voting_buffer()
+            print("[SELECTION] Round 3 selection complete — awaiting Gamemaster to start voting")
+            enter_awaiting_voting_start_after_round_three_selection()
 
 @socketio.on('check_selection_status')
 def handle_check_selection_status():
@@ -4075,6 +4123,10 @@ def handle_next_round():
         advance_to_next_prompting_round_after_selection()
         notify_admin_player_list()
         return
+
+    if game_state['status'] == 'awaiting_voting_start':
+        emit('error', {'message': 'Use Start Voting to begin voting.'})
+        return
     
     if game_state['current_round'] < 3:
         game_state['current_round'] += 1
@@ -4165,6 +4217,20 @@ def handle_next_round():
         )
         emit('error', {'message': msg})
         print(f'[ADMIN] next_round ignored after prompting: {msg}')
+
+
+@socketio.on('start_voting')
+def handle_start_voting():
+    """Admin-only: after R3 selection, start the allocation voting flow."""
+    session_id = session.get('session_id')
+    if session_id != admin_session_id:
+        emit('error', {'message': 'Only admin can start voting'})
+        return
+    if game_state.get('current_round') != 3 or game_state.get('status') != 'awaiting_voting_start':
+        emit('error', {'message': 'Not ready to start voting'})
+        return
+    start_post_round_three_voting_buffer()
+    notify_admin_player_list()
 
 def end_game():
     game_state['status'] = 'game_over'

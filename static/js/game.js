@@ -95,6 +95,8 @@ let gameState = {
     inAllocationVoting: false,
     /** R1/R2: selection done; players on “next round soon” until Gamemaster clicks Next Round. */
     awaitingNextPrompting: false,
+    /** R3: selection done; players waiting until Gamemaster starts voting. */
+    awaitingVotingStart: false,
     postSurveyCompleted: false,
     postSurveyActive: false,
     canStartPostSurvey: false,
@@ -206,13 +208,24 @@ function setAdminRoundControlsForContext() {
     const endBtn = document.getElementById('admin-end-round-btn');
     const skipBtn = document.getElementById('admin-skip-voting-btn');
     const nextBtn = document.getElementById('admin-next-round-btn');
-    if (!endBtn || !skipBtn || !nextBtn) return;
+    const startVotingBtn = document.getElementById('admin-start-voting-btn');
+    if (!endBtn || !skipBtn || !nextBtn || !startVotingBtn) return;
 
     if (gameState.isAdmin && gameState.awaitingNextPrompting) {
         if (grp) grp.style.display = 'block';
         endBtn.style.display = 'none';
         skipBtn.style.display = 'none';
         nextBtn.style.display = '';
+        startVotingBtn.style.display = 'none';
+        return;
+    }
+
+    if (gameState.isAdmin && gameState.awaitingVotingStart) {
+        if (grp) grp.style.display = 'block';
+        endBtn.style.display = 'none';
+        skipBtn.style.display = 'none';
+        nextBtn.style.display = 'none';
+        startVotingBtn.style.display = '';
         return;
     }
 
@@ -223,16 +236,19 @@ function setAdminRoundControlsForContext() {
             endBtn.textContent = 'End Round Early';
             skipBtn.style.display = 'none';
             nextBtn.style.display = 'none';
+            startVotingBtn.style.display = 'none';
         } else {
             endBtn.style.display = 'none';
             skipBtn.style.display = 'none';
             nextBtn.style.display = 'none';
+            startVotingBtn.style.display = 'none';
         }
     } else if (gameState.isAdmin) {
         endBtn.style.display = '';
         endBtn.textContent = 'End Round Early';
         skipBtn.style.display = '';
         nextBtn.style.display = '';
+        startVotingBtn.style.display = 'none';
     }
 }
 
@@ -987,6 +1003,7 @@ socket.on('admin_game_started', (data) => {
 
     gameState.inOnboarding = false;
     gameState.awaitingNextPrompting = false;
+    gameState.awaitingVotingStart = false;
     gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.currentRound = data.round != null ? data.round : 1;
@@ -1089,6 +1106,7 @@ socket.on('admin_onboarding_practice_voting', () => {
 socket.on('admin_allocation_started', (data) => {
     if (!gameState.isAdmin) return;
     gameState.awaitingNextPrompting = false;
+    gameState.awaitingVotingStart = false;
     gameState.inAllocationVoting = true;
     const st = document.getElementById('admin-status');
     if (st) st.textContent = 'Allocation voting';
@@ -1112,6 +1130,7 @@ socket.on('admin_voting_started', (data) => {
     }
     gameState.inOnboarding = false;
     gameState.awaitingNextPrompting = false;
+    gameState.awaitingVotingStart = false;
     gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'prompting';
@@ -1274,6 +1293,15 @@ function syncAdminHeaderFromGameStatus() {
             adminTimerInterval = null;
         }
         setAdminRoundControlsForContext();
+    } else if (gameState.awaitingVotingStart) {
+        if (stEl) stEl.textContent = 'Waiting — ready to start voting';
+        if (arEl) arEl.textContent = String(gameState.currentRound ?? '—');
+        if (timeEl) timeEl.textContent = '—';
+        if (adminTimerInterval) {
+            clearInterval(adminTimerInterval);
+            adminTimerInterval = null;
+        }
+        setAdminRoundControlsForContext();
     }
 }
 
@@ -1283,6 +1311,7 @@ function syncGameStateFromAdminDashboardPayload(data) {
     if (data.game_status != null) {
         gameState.inAllocationVoting = data.game_status === 'allocation_voting';
         gameState.awaitingNextPrompting = data.game_status === 'awaiting_next_prompting';
+        gameState.awaitingVotingStart = data.game_status === 'awaiting_voting_start';
     }
     if (data.current_round !== undefined && data.current_round !== null) {
         gameState.currentRound = data.current_round;
@@ -1736,6 +1765,10 @@ document.getElementById('admin-skip-voting-btn')?.addEventListener('click', () =
 
 document.getElementById('admin-next-round-btn')?.addEventListener('click', () => {
     socket.emit('next_round');
+});
+
+document.getElementById('admin-start-voting-btn')?.addEventListener('click', () => {
+    socket.emit('start_voting');
 });
 
 socket.on('lobby_players_update', (data) => {
@@ -3386,6 +3419,17 @@ socket.on('show_transition_screen', (data) => {
 socket.on('admin_awaiting_next_prompting', (data) => {
     if (!gameState.isAdmin) return;
     gameState.awaitingNextPrompting = true;
+    gameState.awaitingVotingStart = false;
+    if (data && data.current_round != null) {
+        gameState.currentRound = data.current_round;
+    }
+    syncAdminHeaderFromGameStatus();
+});
+
+socket.on('admin_awaiting_voting_start', (data) => {
+    if (!gameState.isAdmin) return;
+    gameState.awaitingVotingStart = true;
+    gameState.awaitingNextPrompting = false;
     if (data && data.current_round != null) {
         gameState.currentRound = data.current_round;
     }
@@ -3406,6 +3450,7 @@ socket.on('return_to_lobby', (data) => {
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
     gameState.awaitingNextPrompting = false;
+    gameState.awaitingVotingStart = false;
     gameState.onboardingPromptingEndTime = null;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
