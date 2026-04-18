@@ -832,8 +832,10 @@ socket.on('image_selected', (data) => {
                 }
             }
         }
+        return;
     }
-    // If success is true, the button state is already updated above
+    // Timer auto-submit also uses select_image; mark confirmed so we never double-submit from the client.
+    gameState.hasConfirmedSelection = true;
 });
 
 // Next round
