@@ -1396,7 +1396,20 @@ function updateAdminPlayerList(players) {
     const adminPlayerList = document.getElementById('admin-player-list');
     if (!adminPlayerList) return;
 
-    lastAdminPlayersForDashboard = players;
+    // Merge with last full roster so partial admin payloads (reconnect / phase events) never drop seat_number.
+    let merged = players;
+    if (lastAdminPlayersForDashboard && Array.isArray(players) && players.length) {
+        const prevBySid = new Map(
+            lastAdminPlayersForDashboard.filter((x) => x && x.session_id).map((x) => [x.session_id, x])
+        );
+        merged = players.map((p) => {
+            if (!p || !p.session_id) return p;
+            const prev = prevBySid.get(p.session_id);
+            return prev ? { ...prev, ...p } : p;
+        });
+    }
+    lastAdminPlayersForDashboard = merged;
+    players = merged;
     initAdminDashboardFilterControls();
 
     if (gameState.isAdmin && gameState.inOnboarding) {

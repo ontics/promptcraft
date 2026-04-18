@@ -495,6 +495,17 @@ def admin_lobby_player_row(p):
     return d
 
 
+def admin_seat_number_for_payload(p):
+    """Normalize seat_number for admin-only JSON (int or None). Caller should pass non-admin players."""
+    sn = p.get('seat_number')
+    if sn is not None and sn != '':
+        try:
+            return int(sn)
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
 def gamemaster_can_start_post_survey():
     """Post-survey is auto-opened after voting completion; no lobby start action."""
     return False
@@ -855,6 +866,7 @@ def handle_join_game(data):
                             'condition': p['condition'],
                             'is_connected': p.get('socket_id') is not None,
                             'session_id': p['session_id'],
+                            'seat_number': admin_seat_number_for_payload(p),
                             'prompts_submitted': len(p['images'].get(game_state['current_round'], []))
                         } for p in players.values() if not p['is_admin']]
                     }, room=player['socket_id'])
@@ -868,6 +880,7 @@ def handle_join_game(data):
                             'condition': p['condition'],
                             'is_connected': p.get('socket_id') is not None,
                             'session_id': p['session_id'],
+                            'seat_number': admin_seat_number_for_payload(p),
                             'prompts_submitted': len(p.get('onboarding_images', [])),
                             'practice_vote_submitted': bool(p.get('onboarding_practice_submitted')) if ob_phase == 'practice_voting' else None,
                         } for p in players.values() if not p['is_admin']]
@@ -1740,6 +1753,7 @@ def handle_start_game():
                     'condition': p['condition'],
                     'is_connected': p.get('socket_id') is not None,
                     'session_id': p['session_id'],
+                    'seat_number': admin_seat_number_for_payload(p),
                     'prompts_submitted': len(p['images'].get(1, []))
                 } for p in players.values() if not p['is_admin']]
             }, room=players[admin_session_id]['socket_id'])
@@ -1820,6 +1834,7 @@ def handle_start_onboarding():
                         'condition': p['condition'],
                         'is_connected': p.get('socket_id') is not None,
                         'session_id': p['session_id'],
+                        'seat_number': admin_seat_number_for_payload(p),
                         'prompts_submitted': len(p.get('onboarding_images', [])),
                     }
                     for p in players.values()
@@ -2733,6 +2748,7 @@ def advance_to_next_prompting_round_after_selection():
                 'condition': x['condition'],
                 'is_connected': x.get('socket_id') is not None,
                 'session_id': x['session_id'],
+                'seat_number': admin_seat_number_for_payload(x),
                 'prompts_submitted': len(x['images'].get(cr, [])),
             } for x in players.values() if not x['is_admin']],
         }, room=players[admin_session_id]['socket_id'])
@@ -3134,6 +3150,7 @@ def finish_experiment_final_ranking():
                 'name': x.get('display_name', x['name']),
                 'incentive_points': x.get('incentive_points', 0),
                 'session_id': x['session_id'],
+                'seat_number': admin_seat_number_for_payload(x),
             } for x in non_admin],
         }, room=players[admin_session_id]['socket_id'])
     open_post_survey_after_game_over({'results': results, 'experiment': True})
@@ -3355,7 +3372,8 @@ def start_voting_phase():
                 'is_connected': p.get('socket_id') is not None,
                 'has_selected': current_round in p['selected_images'] and p.get('has_confirmed_selection', False),
                 'prompts_submitted': len(p['images'].get(current_round, [])),
-                'session_id': p['session_id']
+                'session_id': p['session_id'],
+                'seat_number': admin_seat_number_for_payload(p),
             } for p in players.values() if not p['is_admin']]
         }, room=players[admin_session_id]['socket_id'])
 
@@ -3944,6 +3962,7 @@ def show_round_results():
                 'condition': p['condition'],
                 'is_connected': p.get('socket_id') is not None,
                 'session_id': p['session_id'],
+                'seat_number': admin_seat_number_for_payload(p),
                 'score': p['score'],
                 'prompts_submitted': len(p['images'].get(current_round, []))
             } for p in players.values() if not p['is_admin']]
@@ -4035,6 +4054,7 @@ def handle_next_round():
                     'condition': p['condition'],
                     'is_connected': p.get('socket_id') is not None,
                     'session_id': p['session_id'],
+                    'seat_number': admin_seat_number_for_payload(p),
                     'prompts_submitted': len(p['images'].get(current_round_num, []))
                 } for p in players.values() if not p['is_admin']]
             }, room=players[admin_session_id]['socket_id'])
@@ -4080,6 +4100,7 @@ def end_game():
                 'condition': p['condition'],
                 'is_connected': p.get('socket_id') is not None,
                 'session_id': p['session_id'],
+                'seat_number': admin_seat_number_for_payload(p),
                 'score': p['score'],
                 'prompts_submitted': sum(len(p['images'].get(r, [])) for r in [1, 2, 3])
             } for p in players.values() if not p['is_admin']]
@@ -4173,6 +4194,7 @@ def handle_admin_get_status():
                 'has_selected': has_selected,
                 'has_voted': has_voted,
                 'session_id': p['session_id'],
+                'seat_number': admin_seat_number_for_payload(p),
                 'score': p['score']
             })
     
@@ -4678,6 +4700,7 @@ def next_round_console():
                         'condition': p['condition'],
                         'is_connected': p.get('socket_id') is not None,
                         'session_id': p['session_id'],
+                        'seat_number': admin_seat_number_for_payload(p),
                         'score': p['score'],
                         'prompts_submitted': len(p['images'].get(game_state['current_round'], []))
                     } for p in players.values() if not p['is_admin']]
