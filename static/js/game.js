@@ -4,6 +4,9 @@ const socket = io();
 /** Study groups (must match app.py PLAYER_GROUPS). */
 const PLAYER_GROUPS = ['C_NA', 'C_HU', 'T_NA', 'T_HU'];
 
+/** Full roster from last admin payload (re-apply sort/filter without waiting for server). */
+let lastAdminPlayersForDashboard = null;
+
 function playerCondition(p) {
     if (!p) return '';
     return p.condition != null && p.condition !== '' ? p.condition : (p.team || '');
@@ -693,11 +696,23 @@ function applyPostSurveyFlagsFromServer(data) {
 // Lobby handlers
 function joinGame() {
     const joinBtn = document.getElementById('join-btn');
+    const seatInput = document.getElementById('seat-number-input');
+    const raw = seatInput ? String(seatInput.value || '').trim() : '';
+    if (raw !== '' && !/^\d+$/.test(raw)) {
+        alert('Seat number must contain digits only.');
+        if (seatInput) seatInput.focus();
+        return;
+    }
     if (joinBtn) joinBtn.disabled = true;
-    socket.emit('join_game', {});
+    const payload = raw === '' ? {} : { seat_number: raw };
+    socket.emit('join_game', payload);
 }
 
 document.getElementById('join-btn').addEventListener('click', joinGame);
+document.getElementById('seat-number-input')?.addEventListener('input', (e) => {
+    const el = e.target;
+    el.value = el.value.replace(/\D/g, '');
+});
 
 document.getElementById('assign-teams-btn').addEventListener('click', () => {
     socket.emit('assign_teams');
@@ -1315,9 +1330,74 @@ socket.on('player_voted', (data) => {
     }
 });
 
+function initAdminDashboardFilterControls() {
+    const treatSel = document.getElementById('admin-filter-treatment');
+    if (!treatSel || treatSel.dataset.ready === '1') return;
+    treatSel.dataset.ready = '1';
+    ['C_NA', 'C_HU', 'T_NA', 'T_HU', 'Green', 'Orange'].forEach((g) => {
+        const o = document.createElement('option');
+        o.value = g;
+        o.textContent = g;
+        treatSel.appendChild(o);
+    });
+    const rerender = () => {
+        if (lastAdminPlayersForDashboard) updateAdminPlayerList(lastAdminPlayersForDashboard);
+    };
+    treatSel.addEventListener('change', rerender);
+    document.getElementById('admin-sort-by')?.addEventListener('change', rerender);
+    document.getElementById('admin-sort-dir')?.addEventListener('change', rerender);
+}
+
+function filterSortAdminPlayersForDashboard(players) {
+    const sortKey = document.getElementById('admin-sort-by')?.value || 'seat';
+    const sortDir = document.getElementById('admin-sort-dir')?.value || 'asc';
+    const filterCond = document.getElementById('admin-filter-treatment')?.value || '';
+    const dir = sortDir === 'desc' ? -1 : 1;
+
+    let list = players.filter((p) => !p.is_admin);
+    if (filterCond) {
+        list = list.filter((p) => String(playerCondition(p) || '') === filterCond);
+    }
+
+    const nameTie = (a, b) => String(a.name || '').localeCompare(String(b.name || ''));
+
+    const seatKey = (p) => {
+        if (p.seat_number == null || p.seat_number === '') return null;
+        const n = Number(p.seat_number);
+        return Number.isFinite(n) ? n : null;
+    };
+
+    list.sort((a, b) => {
+        let cmp = 0;
+        if (sortKey === 'seat') {
+            const ak = seatKey(a);
+            const bk = seatKey(b);
+            if (ak == null && bk == null) cmp = 0;
+            else if (ak == null) cmp = 1;
+            else if (bk == null) cmp = -1;
+            else cmp = (ak === bk ? 0 : (ak < bk ? -1 : 1)) * dir;
+        } else if (sortKey === 'condition') {
+            const ac = String(playerCondition(a) || '');
+            const bc = String(playerCondition(b) || '');
+            cmp = ac.localeCompare(bc) * dir;
+        } else {
+            const av = Number.isFinite(Number(a.round10_points)) ? Number(a.round10_points) : 0;
+            const bv = Number.isFinite(Number(b.round10_points)) ? Number(b.round10_points) : 0;
+            cmp = (av === bv ? 0 : (av < bv ? -1 : 1)) * dir;
+        }
+        if (cmp !== 0) return cmp;
+        return nameTie(a, b);
+    });
+    return list;
+}
+
 function updateAdminPlayerList(players) {
+    const adminSummary = document.getElementById('admin-dashboard-summary');
     const adminPlayerList = document.getElementById('admin-player-list');
     if (!adminPlayerList) return;
+
+    lastAdminPlayersForDashboard = players;
+    initAdminDashboardFilterControls();
 
     if (gameState.isAdmin && gameState.inOnboarding) {
         const nonAdmin = players.filter((p) => !p.is_admin);
@@ -1335,65 +1415,70 @@ function updateAdminPlayerList(players) {
         }
     }
     
-    adminPlayerList.innerHTML = '<h3>Players</h3>';
-    
     const isInLobby = gameState.currentRound === 0 && !gameState.inOnboarding && !gameState.inAllocationVoting;
     // Team dropdown + remove player: lobby, or onboarding practice (not live rounds)
     const showTeamAndRosterControls = (gameState.currentRound === 0 || gameState.inOnboarding) && !gameState.inAllocationVoting;
 
-    const connectedCount = players.filter((p) => !p.is_admin && p.is_connected).length;
-    const disconnectedCount = players.filter((p) => !p.is_admin && !p.is_connected).length;
+    if (adminSummary) {
+        adminSummary.innerHTML = '';
+        const h3 = document.createElement('h3');
+        h3.textContent = 'Players';
+        adminSummary.appendChild(h3);
 
-    const connectionCountsEl = document.createElement('div');
-    connectionCountsEl.className = 'admin-connection-counts';
-    connectionCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
-    connectionCountsEl.innerHTML = `
-        <div><strong>Connected:</strong> ${connectedCount}</div>
-        <div><strong>Disconnected:</strong> ${disconnectedCount}</div>
-    `;
-    adminPlayerList.appendChild(connectionCountsEl);
+        const connectedCount = players.filter((p) => !p.is_admin && p.is_connected).length;
+        const disconnectedCount = players.filter((p) => !p.is_admin && !p.is_connected).length;
 
-    // Pre-survey stats + clear lobby (lobby only)
-    if (isInLobby) {
-        const nonAdminLobby = players.filter((p) => !p.is_admin);
-        const preSurveyCompletedCount = nonAdminLobby.filter((p) => p.survey_completed === true).length;
-        const preSurveyPendingCount = nonAdminLobby.length - preSurveyCompletedCount;
-
-        const surveyCountsEl = document.createElement('div');
-        surveyCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
-        surveyCountsEl.innerHTML = `
-            <div><strong>Pre-survey:</strong> ${preSurveyPendingCount}</div>
-            <div><strong>Pre-survey completed:</strong> ${preSurveyCompletedCount}</div>
+        const connectionCountsEl = document.createElement('div');
+        connectionCountsEl.className = 'admin-connection-counts';
+        connectionCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+        connectionCountsEl.innerHTML = `
+            <div><strong>Connected:</strong> ${connectedCount}</div>
+            <div><strong>Disconnected:</strong> ${disconnectedCount}</div>
         `;
-        adminPlayerList.appendChild(surveyCountsEl);
+        adminSummary.appendChild(connectionCountsEl);
 
-        if (gameState.postSurveyActive || nonAdminLobby.some((p) => p.post_survey_completed === true)) {
-            const postDone = nonAdminLobby.filter((p) => p.post_survey_completed === true).length;
-            const postPending = nonAdminLobby.length - postDone;
-            const postCountsEl = document.createElement('div');
-            postCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
-            postCountsEl.innerHTML = `
-                <div><strong>Post-survey pending:</strong> ${postPending}</div>
-                <div><strong>Post-survey completed:</strong> ${postDone}</div>
+        if (isInLobby) {
+            const nonAdminLobby = players.filter((p) => !p.is_admin);
+            const preSurveyCompletedCount = nonAdminLobby.filter((p) => p.survey_completed === true).length;
+            const preSurveyPendingCount = nonAdminLobby.length - preSurveyCompletedCount;
+
+            const surveyCountsEl = document.createElement('div');
+            surveyCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+            surveyCountsEl.innerHTML = `
+                <div><strong>Pre-survey:</strong> ${preSurveyPendingCount}</div>
+                <div><strong>Pre-survey completed:</strong> ${preSurveyCompletedCount}</div>
             `;
-            adminPlayerList.appendChild(postCountsEl);
-        }
+            adminSummary.appendChild(surveyCountsEl);
 
-        const clearLobbyBtn = document.createElement('button');
-        clearLobbyBtn.className = 'btn btn-danger';
-        clearLobbyBtn.style.cssText = 'margin-bottom: 15px; width: 100%; padding: 10px;';
-        clearLobbyBtn.textContent = '🗑️ Clear All Players';
-        clearLobbyBtn.addEventListener('click', () => {
-            if (confirm('Are you sure you want to remove all players from the lobby?')) {
-                socket.emit('clear_lobby');
+            if (gameState.postSurveyActive || nonAdminLobby.some((p) => p.post_survey_completed === true)) {
+                const postDone = nonAdminLobby.filter((p) => p.post_survey_completed === true).length;
+                const postPending = nonAdminLobby.length - postDone;
+                const postCountsEl = document.createElement('div');
+                postCountsEl.style.cssText = 'margin-bottom: 10px; display: flex; gap: 12px; flex-wrap: wrap; font-size: 0.95rem;';
+                postCountsEl.innerHTML = `
+                    <div><strong>Post-survey pending:</strong> ${postPending}</div>
+                    <div><strong>Post-survey completed:</strong> ${postDone}</div>
+                `;
+                adminSummary.appendChild(postCountsEl);
             }
-        });
-        adminPlayerList.appendChild(clearLobbyBtn);
+
+            const clearLobbyBtn = document.createElement('button');
+            clearLobbyBtn.className = 'btn btn-danger';
+            clearLobbyBtn.style.cssText = 'margin-bottom: 15px; width: 100%; padding: 10px;';
+            clearLobbyBtn.textContent = '🗑️ Clear All Players';
+            clearLobbyBtn.addEventListener('click', () => {
+                if (confirm('Are you sure you want to remove all players from the lobby?')) {
+                    socket.emit('clear_lobby');
+                }
+            });
+            adminSummary.appendChild(clearLobbyBtn);
+        }
     }
-    
-    players.forEach(player => {
-        if (player.is_admin) return; // Skip admin in list
-        
+
+    adminPlayerList.innerHTML = '';
+
+    const sortedPlayers = filterSortAdminPlayersForDashboard(players);
+    sortedPlayers.forEach((player) => {
         const item = document.createElement('div');
         item.className = 'admin-player-item';
         item.style.cssText = 'padding: 10px; margin: 5px 0; border: 1px solid #ddd; border-radius: 5px; display: flex; justify-content: space-between; align-items: center;';
@@ -1417,6 +1502,14 @@ function updateAdminPlayerList(players) {
         const nameStrong = document.createElement('strong');
         nameStrong.textContent = player.name;
         nameRow.appendChild(nameStrong);
+
+        const seatVal = player.seat_number;
+        if (seatVal != null && seatVal !== '' && Number.isFinite(Number(seatVal))) {
+            const seatSpan = document.createElement('span');
+            seatSpan.style.cssText = 'color: #495057; font-size: 12px; font-weight: 600;';
+            seatSpan.textContent = `(seat ${Number(seatVal)})`;
+            nameRow.appendChild(seatSpan);
+        }
         
         // Team dropdown (lobby or onboarding practice; hidden during scored rounds)
         if (showTeamAndRosterControls && !player.is_admin) {

@@ -484,6 +484,14 @@ def admin_lobby_player_row(p):
         ensure_post_survey_fields(p)
         d['survey_completed'] = bool(p.get('survey_completed'))
         d['post_survey_completed'] = bool(p.get('post_survey_completed'))
+        sn = p.get('seat_number')
+        if sn is not None and sn != '':
+            try:
+                d['seat_number'] = int(sn)
+            except (TypeError, ValueError):
+                d['seat_number'] = None
+        else:
+            d['seat_number'] = None
     return d
 
 
@@ -1186,6 +1194,21 @@ def handle_join_game(data):
             is_new_admin = True
             final_display_name = 'Gamemaster'  # Show as Gamemaster even in fallback
             print(f"Player {player_name} joined as ADMIN (first player, no code configured)")
+
+        seat_number = None
+        if not is_new_admin:
+            seat_raw = data.get('seat_number')
+            if seat_raw is None or (isinstance(seat_raw, str) and seat_raw.strip() == ''):
+                emit('error', {'message': 'Seat number is required. Use digits only.'})
+                return
+            seat_str = str(seat_raw).strip()
+            if len(seat_str) > 40:
+                emit('error', {'message': 'Seat number may be at most 40 digits.'})
+                return
+            if not seat_str.isdigit():
+                emit('error', {'message': 'Seat number must contain digits only.'})
+                return
+            seat_number = int(seat_str)
         
         # Check if this player exists in the database for the current game (reconnection with lost session)
         # Uses case-insensitive matching
@@ -1237,6 +1260,7 @@ def handle_join_game(data):
             'survey_frequency': None,
             'survey_skills_text': None,
             'post_survey_completed': False,
+            'seat_number': seat_number,
         }
         players[session_id] = player
 
@@ -1492,6 +1516,7 @@ def handle_admin_login(data):
             'survey_frequency': None,
             'survey_skills_text': None,
             'post_survey_completed': False,
+            'seat_number': None,
         }
         players[session_id] = player
     else:
@@ -1499,6 +1524,7 @@ def handle_admin_login(data):
         player['is_admin'] = True
         player['display_name'] = 'Gamemaster'
         player['socket_id'] = request.sid
+        player['seat_number'] = None
 
     admin_session_id = session_id
 
