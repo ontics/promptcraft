@@ -113,8 +113,6 @@ game_state = {
     'allocation_experiment_finalized': False,
     '_synthetic_ballot_seq': 0,
     '_synthetic_prompt_seq': 0,  # negative prompt_ids when DB insert fails (in-memory selection only)
-    # After R1/R2 selection (full duration elapsed), 5s client countdown before next prompting
-    'inter_round_countdown_started': False,
 }
 
 players = {}  # session_id: player_data
@@ -2679,30 +2677,6 @@ def _next_synthetic_ballot_id():
     return game_state['_synthetic_ballot_seq']
 
 
-def schedule_inter_round_countdown_then_next_prompting():
-    """After R1/R2 image selection window ends, show 5s client countdown then start next prompting round."""
-    if game_state.get('inter_round_countdown_started'):
-        return
-    game_state['inter_round_countdown_started'] = True
-    print('[SELECTION] Scheduling 5s inter-round countdown before next prompting round')
-
-    def _after_countdown():
-        time.sleep(5)
-        game_state['inter_round_countdown_started'] = False
-        if game_state['status'] != 'voting':
-            print('[SELECTION] Inter-round countdown finished but status is not voting; skipping advance')
-            return
-        if game_state.get('current_round', 0) >= 3:
-            return
-        advance_to_next_prompting_round_after_selection()
-
-    for pl in players.values():
-        sid = pl.get('socket_id')
-        if sid:
-            socketio.emit('inter_round_countdown', {}, room=sid)
-    socketio.start_background_task(_after_countdown)
-
-
 def advance_to_next_prompting_round_after_selection():
     """After selection phase of round 1 or 2, start the next 5-minute prompting round."""
     if game_state['current_round'] >= 3:
@@ -3559,8 +3533,7 @@ def force_finish_image_selection_phase():
                     _persist_image_selection_row(player, current_round, player['selected_images'][current_round])
 
     if current_round < 3:
-        game_state['inter_round_countdown_started'] = False
-        print(f"[ADMIN] Forcing selection complete — advancing to prompting round {current_round + 1} (no countdown)")
+        print(f"[ADMIN] Forcing selection complete — advancing to prompting round {current_round + 1}")
         advance_to_next_prompting_round_after_selection()
     else:
         print('[ADMIN] Forcing selection complete — starting post-round-3 allocation prep')
@@ -3569,7 +3542,7 @@ def force_finish_image_selection_phase():
 
 
 def check_all_selected():
-    """Selection phase: auto-select on timer expiry; after full duration, R1–R2 → inter-round countdown then prompting, R3 → voting prep."""
+    """Check if all players have selected their images, and advance to voting if so"""
     # Don't check if we're already past the voting phase (e.g., showing results)
     if game_state['status'] not in ['voting', 'voting_images']:
         return
@@ -3608,25 +3581,32 @@ def check_all_selected():
                     # Don't mark as confirmed - let admin handle this edge case
                     # The game will be stuck, but this is better than selecting an error image
     
-    # Until the full selection window elapses, do not advance (even if everyone confirmed early)
+    # Check if all players have now confirmed their selection (either manually or via timer expiry)
+    all_selected = all(
+        player.get('has_confirmed_selection', {}).get(current_round, False)
+        for player in active_players
+    )
+    
+    # Emit waiting status to all players (only if time hasn't elapsed)
     if time_elapsed < duration:
         waiting_count = len([p for p in active_players if not p.get('has_confirmed_selection', {}).get(current_round, False)])
         if waiting_count > 0:
             socketio.emit('selection_waiting', {'waiting_count': waiting_count, 'total_players': len(active_players)})
-        return
 
-    # Selection period over (auto-select for stragglers already applied above)
-    if game_state['current_round'] < 3:
-        print(f"[SELECTION] Selection window ended — inter-round countdown then prompting round {game_state['current_round'] + 1}")
-        schedule_inter_round_countdown_then_next_prompting()
-    else:
-        print(f"[SELECTION] Round 3 selection complete — starting voting prep buffer")
-        start_post_round_three_voting_buffer()
+    # Advance: next prompting round, or post–round-3 voting prep (no per-round image voting)
+    if all_selected or (time_elapsed >= duration):
+        if game_state['current_round'] < 3:
+            print(f"[SELECTION] Advancing to prompting round {game_state['current_round'] + 1}")
+            advance_to_next_prompting_round_after_selection()
+        else:
+            print(f"[SELECTION] Round 3 selection complete — starting voting prep buffer")
+            start_post_round_three_voting_buffer()
 
 @socketio.on('check_selection_status')
 def handle_check_selection_status():
-    """Client requests selection-phase sync (e.g. when timer hits zero; server enforces full window)."""
+    """Client requests to check selection status (called when timer expires)"""
     if game_state['status'] == 'voting':
+        # Check if all players have selected or time has elapsed (will auto-select and advance)
         check_all_selected()
 
 def start_voting_on_images():
@@ -4319,7 +4299,6 @@ def handle_restart_game():
     game_state['post_survey_active'] = False
     game_state['last_game_over_payload'] = None
     game_state['_synthetic_prompt_seq'] = 0
-    game_state['inter_round_countdown_started'] = False
 
     # Kick ALL players including admin - remove them from the game and require them to rejoin
     players_to_remove = []
