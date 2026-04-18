@@ -77,6 +77,8 @@ let gameState = {
     hasConfirmedSelection: false,    // Track if player confirmed their selection
     // Admin time calculation (client-side)
     roundEndTime: null,  // Unix timestamp for round end
+    /** Unix timestamp when onboarding practice prompting ends (server `end_time`; no auto-advance at 0). */
+    onboardingPromptingEndTime: null,
     votingStartTime: null,  // Unix timestamp for voting start
     votingDuration: null,  // Duration in seconds
     inSelectionPhase: false,  // Track if we're in the selection phase (for late-arriving images)
@@ -325,6 +327,8 @@ function showOnboardingPracticeVotingFromPayload(data) {
     gameState.imageContextBulletsEnabled = false;
     gameState.inOnboarding = true;
     gameState.onboardingPhase = 'practice_voting';
+    gameState.onboardingPromptingEndTime = null;
+    clearRoundTimerIfAny();
 
     const opts = data.option_images || [];
     opts.forEach((row) => {
@@ -925,6 +929,7 @@ socket.on('admin_joined', (data) => {
     if (data.game_status == null) {
         gameState.currentRound = 0;
         gameState.inOnboarding = false;
+        gameState.onboardingPromptingEndTime = null;
         gameState.onboardingPhase = 'prompting';
         gameState.inAllocationVoting = false;
     }
@@ -968,6 +973,7 @@ socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
 
     gameState.inOnboarding = false;
+    gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.currentRound = data.round != null ? data.round : 1;
 
@@ -1028,8 +1034,14 @@ socket.on('admin_onboarding_started', (data) => {
     if (adminGameControls) adminGameControls.style.display = 'block';
     setAdminRoundControlsForContext();
 
-    const timeEl = document.getElementById('admin-time-remaining');
-    if (timeEl) timeEl.textContent = '5:00';
+    if (gameState.onboardingPhase === 'practice_voting') {
+        gameState.onboardingPromptingEndTime = null;
+        const timeEl = document.getElementById('admin-time-remaining');
+        if (timeEl) timeEl.textContent = '—';
+    } else {
+        gameState.onboardingPromptingEndTime = data.end_time != null ? data.end_time : null;
+        startAdminTimeCalculation();
+    }
 
     document.getElementById('admin-round').textContent = '—';
     document.getElementById('admin-status').textContent =
@@ -1048,6 +1060,13 @@ socket.on('admin_onboarding_practice_voting', () => {
     gameState.inOnboarding = true;
     gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'practice_voting';
+    gameState.onboardingPromptingEndTime = null;
+    if (adminTimerInterval) {
+        clearInterval(adminTimerInterval);
+        adminTimerInterval = null;
+    }
+    const timeEl = document.getElementById('admin-time-remaining');
+    if (timeEl) timeEl.textContent = '—';
     setAdminRoundControlsForContext();
     const st = document.getElementById('admin-status');
     if (st) st.textContent = 'Onboarding (practice voting)';
@@ -1077,6 +1096,7 @@ socket.on('admin_voting_started', (data) => {
         adminScreen.style.display = 'block';
     }
     gameState.inOnboarding = false;
+    gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'prompting';
     setAdminRoundControlsForContext();
@@ -1193,9 +1213,13 @@ function startAdminTimeCalculation() {
         if (!timeEl) return;
         
         let timeRemaining = null;
-        
+
+        if (gameState.inOnboarding && gameState.onboardingPhase === 'prompting' && gameState.onboardingPromptingEndTime) {
+            const now = Date.now() / 1000;
+            timeRemaining = Math.max(0, gameState.onboardingPromptingEndTime - now);
+        }
         // Calculate based on round end time (during gameplay)
-        if (gameState.roundEndTime) {
+        else if (gameState.roundEndTime) {
             const now = Date.now() / 1000;
             timeRemaining = Math.max(0, gameState.roundEndTime - now);
         }
@@ -1234,6 +1258,7 @@ function syncGameStateFromAdminDashboardPayload(data) {
         }
     } else if (data.game_status != null && data.game_status !== 'onboarding') {
         gameState.inOnboarding = false;
+        gameState.onboardingPromptingEndTime = null;
         gameState.onboardingPhase = 'prompting';
     }
 }
@@ -1416,6 +1441,7 @@ function updateAdminPlayerList(players) {
         const nonAdmin = players.filter((p) => !p.is_admin);
         if (nonAdmin.length === 0) {
             gameState.inOnboarding = false;
+            gameState.onboardingPromptingEndTime = null;
             gameState.onboardingPhase = 'prompting';
             const timeEl = document.getElementById('admin-time-remaining');
             if (timeEl) timeEl.textContent = '-';
@@ -1768,6 +1794,7 @@ socket.on('onboarding_started', (data) => {
     gameState.imageContextBulletsEnabled = false;
     gameState.inOnboarding = true;
     gameState.onboardingPhase = 'prompting';
+    gameState.onboardingPromptingEndTime = data.end_time != null ? data.end_time : null;
     gameState.onboardingMaxPrompts = data.max_prompts || 3;
     gameState.onboardingPromptCount = 0;
     gameState.currentRound = 1;
@@ -1796,10 +1823,14 @@ socket.on('onboarding_started', (data) => {
     }
 
     clearRoundTimerIfAny();
-    const timerEl = document.getElementById('timer');
-    if (timerEl) {
-        timerEl.textContent = '5:00';
-        timerEl.classList.remove('warning');
+    if (data.end_time != null) {
+        startOnboardingPromptingTimer(data.end_time);
+    } else {
+        const timerEl = document.getElementById('timer');
+        if (timerEl) {
+            timerEl.textContent = '—';
+            timerEl.classList.remove('warning');
+        }
     }
 
     applyOnboardingGenerateState();
@@ -1825,6 +1856,7 @@ socket.on('game_started', (data) => {
     }
 
     gameState.inOnboarding = false;
+    gameState.onboardingPromptingEndTime = null;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
@@ -3040,6 +3072,7 @@ socket.on('game_restarted', (data) => {
     // Reset state
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
@@ -3075,6 +3108,7 @@ socket.on('game_restarted_kick', (data) => {
     syncImageContextBulletsVisibility();
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPromptingEndTime = null;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
@@ -3207,10 +3241,53 @@ function startRoundTimer(endTime) {
     }, 1000);
 }
 
+/** Onboarding practice prompting: same countdown UX as scored rounds, but no round_timer_check at 0 (no auto-advance). */
+function startOnboardingPromptingTimer(endTime) {
+    if (timerInterval) clearInterval(timerInterval);
+
+    const timerEl = document.getElementById('timer');
+    const bufferTimerEl = document.getElementById('buffer-timer');
+    if (timerEl) timerEl.classList.remove('warning');
+    if (bufferTimerEl) bufferTimerEl.style.display = 'none';
+
+    const tick = () => {
+        const now = Date.now() / 1000;
+        const remaining = Math.max(0, endTime - now);
+
+        if (timerEl) {
+            const minutes = Math.floor(remaining / 60);
+            const seconds = Math.floor(remaining % 60);
+            timerEl.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            if (remaining > 0 && remaining <= 30) {
+                timerEl.classList.add('warning');
+            } else {
+                timerEl.classList.remove('warning');
+            }
+        }
+
+        if (remaining <= 0) {
+            clearInterval(timerInterval);
+            timerInterval = null;
+            if (timerEl) {
+                timerEl.textContent = '0:00';
+                timerEl.classList.remove('warning');
+            }
+        }
+    };
+
+    tick();
+    if (endTime > Date.now() / 1000) {
+        timerInterval = setInterval(tick, 1000);
+    }
+}
+
 // Handle timer updates from server
 socket.on('timer_update', (data) => {
     // Only update the main round timer while on the game screen (avoid fighting selection / other UIs)
     if (!screens.game || !screens.game.classList.contains('active')) {
+        return;
+    }
+    if (gameState.inOnboarding) {
         return;
     }
     const timerEl = document.getElementById('timer');
@@ -3278,6 +3355,7 @@ socket.on('return_to_lobby', (data) => {
     gameState.tempVoteSelection = null;
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.onboardingPromptingEndTime = null;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;
     setOnboardingInstructionsPanelVisible(false);
@@ -3305,6 +3383,7 @@ socket.on('return_to_lobby', (data) => {
         adminTimerInterval = null;
     }
     gameState.roundEndTime = null;
+    gameState.onboardingPromptingEndTime = null;
     gameState.votingStartTime = null;
     gameState.votingDuration = null;
     
