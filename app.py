@@ -3497,6 +3497,19 @@ def handle_select_image(data):
         return
 
     player = players[session_id]
+    if game_state['status'] != 'voting':
+        # Idempotent ack: server may have already finished selection (e.g. timer) before this packet arrives.
+        cr = game_state['current_round']
+        if (
+            game_state['status'] == 'awaiting_next_prompting'
+            and cr in player.get('selected_images', {})
+            and player.get('has_confirmed_selection', {}).get(cr)
+        ):
+            emit('image_selected', {'success': True})
+            return
+        emit('image_selected', {'success': False, 'error': 'Selection is not open right now.'})
+        return
+
     prompt_id = data.get('prompt_id')
     prompt_index_sel = data.get('prompt_index')
     image_index = data.get('image_index')  # Keep for backward compatibility/validation
@@ -3686,9 +3699,15 @@ def check_all_selected():
             if game_state['status'] == 'voting':
                 print(f"[SELECTION] Selection complete for round {game_state['current_round']} — awaiting Gamemaster for next prompting round")
                 enter_awaiting_next_prompting_after_selection()
-            else:
+            elif game_state['status'] == 'voting_images':
+                # Legacy path only — never treat other statuses (e.g. awaiting_next_prompting) as "auto-advance"
                 print(f"[SELECTION] voting_images complete for round {game_state['current_round']} — advancing to next prompting (legacy)")
                 advance_to_next_prompting_round_after_selection()
+            else:
+                print(
+                    f"[SELECTION] Selection completion ignored — status already {game_state['status']} "
+                    f"(likely another request entered the Gamemaster gate first)"
+                )
         else:
             print(f"[SELECTION] Round 3 selection complete — starting voting prep buffer")
             start_post_round_three_voting_buffer()
