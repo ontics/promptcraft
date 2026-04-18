@@ -93,6 +93,8 @@ let gameState = {
     allocationRoundIndex: 1,
     /** True while game_state.status is allocation_voting (admin dashboard context). */
     inAllocationVoting: false,
+    /** R1/R2: selection done; players on “next round soon” until Gamemaster clicks Next Round. */
+    awaitingNextPrompting: false,
     postSurveyCompleted: false,
     postSurveyActive: false,
     canStartPostSurvey: false,
@@ -205,6 +207,14 @@ function setAdminRoundControlsForContext() {
     const skipBtn = document.getElementById('admin-skip-voting-btn');
     const nextBtn = document.getElementById('admin-next-round-btn');
     if (!endBtn || !skipBtn || !nextBtn) return;
+
+    if (gameState.isAdmin && gameState.awaitingNextPrompting) {
+        if (grp) grp.style.display = 'block';
+        endBtn.style.display = 'none';
+        skipBtn.style.display = 'none';
+        nextBtn.style.display = '';
+        return;
+    }
 
     if (gameState.isAdmin && gameState.inOnboarding) {
         if (grp) grp.style.display = 'block';
@@ -950,6 +960,7 @@ socket.on('admin_joined', (data) => {
 
     // Update admin player list
     updateAdminPlayerList(data.players);
+    syncAdminHeaderFromGameStatus();
     showLobbySurveyForPlayer();
 });
 
@@ -973,6 +984,7 @@ socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
 
     gameState.inOnboarding = false;
+    gameState.awaitingNextPrompting = false;
     gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.currentRound = data.round != null ? data.round : 1;
@@ -1074,6 +1086,7 @@ socket.on('admin_onboarding_practice_voting', () => {
 
 socket.on('admin_allocation_started', (data) => {
     if (!gameState.isAdmin) return;
+    gameState.awaitingNextPrompting = false;
     gameState.inAllocationVoting = true;
     const st = document.getElementById('admin-status');
     if (st) st.textContent = 'Allocation voting';
@@ -1096,6 +1109,7 @@ socket.on('admin_voting_started', (data) => {
         adminScreen.style.display = 'block';
     }
     gameState.inOnboarding = false;
+    gameState.awaitingNextPrompting = false;
     gameState.onboardingPromptingEndTime = null;
     gameState.inAllocationVoting = false;
     gameState.onboardingPhase = 'prompting';
@@ -1137,6 +1151,7 @@ socket.on('player_status_update', (data) => {
     if (gameState.isAdmin) {
         syncGameStateFromAdminDashboardPayload(data);
         updateAdminPlayerList(data.players);
+        syncAdminHeaderFromGameStatus();
         syncStartPostSurveyButton();
     } else {
         console.warn('player_status_update received but user is not admin');
@@ -1242,11 +1257,30 @@ function startAdminTimeCalculation() {
 
 let adminTimerInterval = null;
 
+/** Update admin header labels from gameState (after syncGameStateFromAdminDashboardPayload). */
+function syncAdminHeaderFromGameStatus() {
+    if (!gameState.isAdmin) return;
+    const stEl = document.getElementById('admin-status');
+    const arEl = document.getElementById('admin-round');
+    const timeEl = document.getElementById('admin-time-remaining');
+    if (gameState.awaitingNextPrompting) {
+        if (stEl) stEl.textContent = 'Waiting — next round soon';
+        if (arEl) arEl.textContent = String(gameState.currentRound ?? '—');
+        if (timeEl) timeEl.textContent = '—';
+        if (adminTimerInterval) {
+            clearInterval(adminTimerInterval);
+            adminTimerInterval = null;
+        }
+        setAdminRoundControlsForContext();
+    }
+}
+
 /** Apply server game phase fields included on admin_joined / player_status_update payloads. */
 function syncGameStateFromAdminDashboardPayload(data) {
     if (!data || typeof data !== 'object') return;
     if (data.game_status != null) {
         gameState.inAllocationVoting = data.game_status === 'allocation_voting';
+        gameState.awaitingNextPrompting = data.game_status === 'awaiting_next_prompting';
     }
     if (data.current_round !== undefined && data.current_round !== null) {
         gameState.currentRound = data.current_round;
@@ -3323,7 +3357,12 @@ socket.on('show_transition_screen', (data) => {
         clearTimeout(gameState.transitionTimer);
         clearInterval(gameState.transitionCountdown);
     }
-    
+    gameState.transitionTimer = null;
+
+    if (data.wait_for_admin) {
+        return;
+    }
+
     // Client-side fallback: Ensure progression after max wait
     const maxWait = data.max_wait || 10; // Default to 10 seconds max
     
@@ -3342,6 +3381,15 @@ socket.on('show_transition_screen', (data) => {
     }, (maxWait + 0.5) * 1000); // Add 0.5s buffer
 });
 
+socket.on('admin_awaiting_next_prompting', (data) => {
+    if (!gameState.isAdmin) return;
+    gameState.awaitingNextPrompting = true;
+    if (data && data.current_round != null) {
+        gameState.currentRound = data.current_round;
+    }
+    syncAdminHeaderFromGameStatus();
+});
+
 socket.on('return_to_lobby', (data) => {
     // Return to lobby screen
     showScreen('lobby');
@@ -3355,6 +3403,7 @@ socket.on('return_to_lobby', (data) => {
     gameState.tempVoteSelection = null;
     gameState.currentRound = 0;
     gameState.inOnboarding = false;
+    gameState.awaitingNextPrompting = false;
     gameState.onboardingPromptingEndTime = null;
     gameState.onboardingPhase = 'prompting';
     gameState.onboardingPromptCount = 0;

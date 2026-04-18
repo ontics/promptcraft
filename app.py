@@ -76,9 +76,14 @@ def get_google_genai_client():
 # Practice onboarding prompting window (server sync); cleared when leaving prompting or onboarding.
 ONBOARDING_PROMPTING_DURATION_SEC = 180
 
+# After R1/R2 image selection; players see transition until Gamemaster clicks Next Round.
+NEXT_ROUND_SOON_MESSAGE = (
+    'Next round will start soon. Please wait for the Gamemaster to continue.'
+)
+
 # Game state
 game_state = {
-    'status': 'lobby',  # lobby, onboarding, playing, voting, voting_prep, allocation_voting, round_results, game_over
+    'status': 'lobby',  # lobby, onboarding, playing, transitioning, voting, awaiting_next_prompting, voting_prep, allocation_voting, round_results, game_over
     'current_round': 0,
     'round_start_time': None,
     'round_end_time': None,
@@ -562,7 +567,7 @@ def admin_player_status_row_with_round(p):
         'round10_points': int(p.get('incentive_points', 0) or 0),
         'has_selected': (
             (cr in p['selected_images'])
-            if include_game_state and st in ['voting', 'voting_images']
+            if include_game_state and st in ['voting', 'voting_images', 'awaiting_next_prompting']
             else None
         ),
         'has_voted': (
@@ -903,6 +908,15 @@ def handle_join_game(data):
                             },
                             room=player['socket_id'],
                         )
+                elif game_state['status'] == 'awaiting_next_prompting':
+                    socketio.emit(
+                        'admin_awaiting_next_prompting',
+                        {
+                            'current_round': game_state['current_round'],
+                            'game_status': 'awaiting_next_prompting',
+                        },
+                        room=player['socket_id'],
+                    )
                 elif game_state['status'] == 'allocation_voting':
                     socketio.emit(
                         'admin_allocation_started',
@@ -1058,6 +1072,15 @@ def handle_join_game(data):
                             'default_selected': current_round in player['selected_images'],
                             'image_context_bullets': player_gets_image_context_bullets(player),
                         }, room=player['socket_id'])
+                elif game_state['status'] == 'awaiting_next_prompting':
+                    socketio.emit(
+                        'show_transition_screen',
+                        {
+                            'message': NEXT_ROUND_SOON_MESSAGE,
+                            'wait_for_admin': True,
+                        },
+                        room=player['socket_id'],
+                    )
                 elif game_state['status'] == 'allocation_voting':
                     cached = player.get('allocation_last_payload')
                     if cached and player.get('socket_id'):
@@ -2709,6 +2732,31 @@ def _next_synthetic_ballot_id():
     return game_state['_synthetic_ballot_seq']
 
 
+def enter_awaiting_next_prompting_after_selection():
+    """R1/R2: selection is done; show interstitial until Gamemaster uses Next Round."""
+    if game_state['status'] != 'voting':
+        return
+    if game_state['current_round'] >= 3:
+        return
+    game_state['status'] = 'awaiting_next_prompting'
+    print(f"[SELECTION] Entering awaiting_next_prompting after round {game_state['current_round']} selection")
+    for p in players.values():
+        if p['is_admin']:
+            continue
+        sid = p.get('socket_id')
+        if not sid:
+            continue
+        socketio.emit(
+            'show_transition_screen',
+            {
+                'message': NEXT_ROUND_SOON_MESSAGE,
+                'wait_for_admin': True,
+            },
+            room=sid,
+        )
+    notify_admin_player_list()
+
+
 def advance_to_next_prompting_round_after_selection():
     """After selection phase of round 1 or 2, start the next 5-minute prompting round."""
     if game_state['current_round'] >= 3:
@@ -3183,6 +3231,9 @@ def handle_round_timer_check():
     if game_state['status'] in ['round_results', 'game_over']:
         return
 
+    if game_state['status'] == 'awaiting_next_prompting':
+        return
+
     if game_state['status'] == 'onboarding':
         return
     
@@ -3569,8 +3620,8 @@ def force_finish_image_selection_phase():
                     _persist_image_selection_row(player, current_round, player['selected_images'][current_round])
 
     if current_round < 3:
-        print(f"[ADMIN] Forcing selection complete — advancing to prompting round {current_round + 1}")
-        advance_to_next_prompting_round_after_selection()
+        print(f"[ADMIN] Forcing selection complete — awaiting Gamemaster for prompting round {current_round + 1}")
+        enter_awaiting_next_prompting_after_selection()
     else:
         print('[ADMIN] Forcing selection complete — starting post-round-3 allocation prep')
         start_post_round_three_voting_buffer()
@@ -3629,11 +3680,15 @@ def check_all_selected():
         if waiting_count > 0:
             socketio.emit('selection_waiting', {'waiting_count': waiting_count, 'total_players': len(active_players)})
 
-    # Advance: next prompting round, or post–round-3 voting prep (no per-round image voting)
+    # Advance: R1/R2 image selection → admin gate; legacy voting_images → keep auto advance; R3 → allocation prep
     if all_selected or (time_elapsed >= duration):
         if game_state['current_round'] < 3:
-            print(f"[SELECTION] Advancing to prompting round {game_state['current_round'] + 1}")
-            advance_to_next_prompting_round_after_selection()
+            if game_state['status'] == 'voting':
+                print(f"[SELECTION] Selection complete for round {game_state['current_round']} — awaiting Gamemaster for next prompting round")
+                enter_awaiting_next_prompting_after_selection()
+            else:
+                print(f"[SELECTION] voting_images complete for round {game_state['current_round']} — advancing to next prompting (legacy)")
+                advance_to_next_prompting_round_after_selection()
         else:
             print(f"[SELECTION] Round 3 selection complete — starting voting prep buffer")
             start_post_round_three_voting_buffer()
@@ -3996,6 +4051,11 @@ def handle_next_round():
     if session_id != admin_session_id:
         emit('error', {'message': 'Only admin can advance to next round'})
         return
+
+    if game_state['status'] == 'awaiting_next_prompting':
+        advance_to_next_prompting_round_after_selection()
+        notify_admin_player_list()
+        return
     
     if game_state['current_round'] < 3:
         game_state['current_round'] += 1
@@ -4202,7 +4262,11 @@ def handle_admin_get_status():
                 has_voted = None
             else:
                 prompts_submitted = len(p['images'].get(current_round, [])) if current_round > 0 else 0
-                has_selected = current_round in p['selected_images'] if status in ['voting', 'voting_images'] else None
+                has_selected = (
+                    current_round in p['selected_images']
+                    if status in ['voting', 'voting_images', 'awaiting_next_prompting']
+                    else None
+                )
                 has_voted = p['has_voted'].get(current_round, False) if status == 'voting_images' else None
 
             player_status.append({
@@ -4656,6 +4720,11 @@ def skip_voting_console():
 
 def next_round_console():
     """Console command: Advance to next round or final leaderboard"""
+    if game_state['status'] == 'awaiting_next_prompting':
+        print('[CONSOLE] Advancing from awaiting_next_prompting via advance_to_next_prompting_round_after_selection')
+        advance_to_next_prompting_round_after_selection()
+        notify_admin_player_list()
+        return True
     if game_state['status'] == 'round_results':
         if game_state['current_round'] < 3:
             print(f"[CONSOLE] Advancing from round {game_state['current_round']} to next round")
