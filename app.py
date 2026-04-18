@@ -73,6 +73,9 @@ def get_google_genai_client():
         _genai_sdk_client = google_genai.Client(api_key=key)
     return _genai_sdk_client
 
+# Practice onboarding prompting window (server sync); cleared when leaving prompting or onboarding.
+ONBOARDING_PROMPTING_DURATION_SEC = 180
+
 # Game state
 game_state = {
     'status': 'lobby',  # lobby, onboarding, playing, voting, voting_prep, allocation_voting, round_results, game_over
@@ -93,6 +96,8 @@ game_state = {
     'onboarding_target': {'id': 0, 'url': '/static/images/onboarding-target.png'},
     # Sub-phase when status == 'onboarding': 'prompting' | 'practice_voting'
     'onboarding_phase': 'prompting',
+    # Unix time when onboarding practice prompting ends (no auto-advance; display only).
+    'onboarding_prompting_end_time': None,
     # Post-game survey: opens automatically when voting is fully completed.
     'post_survey_active': False,
     'last_game_over_payload': None,
@@ -617,6 +622,7 @@ def emit_onboarding_practice_voting_to_player(player, socket_room):
 
 def broadcast_onboarding_practice_voting():
     """Switch onboarding to practice voting and notify players + Gamemaster."""
+    game_state['onboarding_prompting_end_time'] = None
     game_state['onboarding_phase'] = 'practice_voting'
     for p in players.values():
         if p['is_admin']:
@@ -872,7 +878,7 @@ def handle_join_game(data):
                     }, room=player['socket_id'])
                 elif game_state['status'] == 'onboarding':
                     ob_phase = game_state.get('onboarding_phase', 'prompting')
-                    socketio.emit('admin_onboarding_started', {
+                    _adm_ob = {
                         'target': game_state.get('onboarding_target'),
                         'onboarding_phase': ob_phase,
                         'players': [{
@@ -883,8 +889,11 @@ def handle_join_game(data):
                             'seat_number': admin_seat_number_for_payload(p),
                             'prompts_submitted': len(p.get('onboarding_images', [])),
                             'practice_vote_submitted': bool(p.get('onboarding_practice_submitted')) if ob_phase == 'practice_voting' else None,
-                        } for p in players.values() if not p['is_admin']]
-                    }, room=player['socket_id'])
+                        } for p in players.values() if not p['is_admin']],
+                    }
+                    if ob_phase == 'prompting' and game_state.get('onboarding_prompting_end_time'):
+                        _adm_ob['end_time'] = game_state['onboarding_prompting_end_time']
+                    socketio.emit('admin_onboarding_started', _adm_ob, room=player['socket_id'])
                     if ob_phase == 'practice_voting':
                         socketio.emit(
                             'admin_onboarding_practice_voting',
@@ -919,11 +928,14 @@ def handle_join_game(data):
                         }
                         if welcome:
                             char_payload['message'] = welcome
-                        socketio.emit('onboarding_started', {
+                        _ob_pl = {
                             'target': game_state.get('onboarding_target'),
                             'character': char_payload,
                             'max_prompts': 3,
-                        }, room=player['socket_id'])
+                        }
+                        if game_state.get('onboarding_prompting_end_time'):
+                            _ob_pl['end_time'] = game_state['onboarding_prompting_end_time']
+                        socketio.emit('onboarding_started', _ob_pl, room=player['socket_id'])
                         for img_data in player.get('onboarding_images', []):
                             image_url = img_data.get('image_url')
                             _ob_idx = player['onboarding_images'].index(img_data)
@@ -1675,6 +1687,7 @@ def handle_start_game():
         
         game_state['status'] = 'playing'
         game_state['onboarding_phase'] = 'prompting'
+        game_state['onboarding_prompting_end_time'] = None
         game_state['post_survey_active'] = False
         game_state['last_game_over_payload'] = None
         game_state['current_round'] = 1
@@ -1763,7 +1776,7 @@ def handle_start_game():
 
 @socketio.on('start_onboarding')
 def handle_start_onboarding():
-    """Gamemaster: practice prompting phase (fixed target, max 3 prompts, no round timer)."""
+    """Gamemaster: practice prompting phase (fixed target, max 3 prompts, 3 min synced timer; no auto-advance)."""
     session_id = session.get('session_id')
     if session_id != admin_session_id:
         emit('error', {'message': 'Only the Gamemaster can start onboarding'})
@@ -1788,6 +1801,8 @@ def handle_start_onboarding():
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
+    _ob_end = time.time() + ONBOARDING_PROMPTING_DURATION_SEC
+    game_state['onboarding_prompting_end_time'] = _ob_end
     target = game_state.get('onboarding_target') or {'id': 0, 'url': '/static/images/onboarding-target.png'}
 
     for p in players.values():
@@ -1818,6 +1833,7 @@ def handle_start_onboarding():
                 'target': target,
                 'character': char_payload,
                 'max_prompts': 3,
+                'end_time': _ob_end,
             },
             room=p['socket_id'],
         )
@@ -1828,6 +1844,7 @@ def handle_start_onboarding():
             {
                 'target': target,
                 'onboarding_phase': 'prompting',
+                'end_time': _ob_end,
                 'players': [
                     {
                         'name': p.get('display_name', p['name']),
@@ -3155,6 +3172,7 @@ def finish_experiment_final_ranking():
         }, room=players[admin_session_id]['socket_id'])
     open_post_survey_after_game_over({'results': results, 'experiment': True})
     game_state['status'] = 'lobby'
+    game_state['onboarding_prompting_end_time'] = None
     print('[GAME] Experiment complete — final ranking sent')
 
 
@@ -4114,6 +4132,7 @@ def end_game():
     # Players will still see the leaderboard on their screen, but server state is reset
     game_state['status'] = 'lobby'
     game_state['onboarding_phase'] = 'prompting'
+    game_state['onboarding_prompting_end_time'] = None
     notify_admin_player_list()
 
 @socketio.on('skip_voting')
@@ -4301,6 +4320,7 @@ def handle_restart_game():
     # Reset game state (game_id will be None, so next start_game will create a new one)
     game_state['status'] = 'lobby'
     game_state['onboarding_phase'] = 'prompting'
+    game_state['onboarding_prompting_end_time'] = None
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
@@ -4435,6 +4455,7 @@ def handle_clear_lobby():
         game_state['status'] = 'lobby'
         game_state['current_round'] = 0
         game_state['onboarding_phase'] = 'prompting'
+        game_state['onboarding_prompting_end_time'] = None
 
     if len([p for p in players.values() if not p['is_admin']]) == 0:
         game_state['post_survey_active'] = False
@@ -4497,6 +4518,7 @@ def handle_remove_player(data):
         game_state['status'] = 'lobby'
         game_state['current_round'] = 0
         game_state['onboarding_phase'] = 'prompting'
+        game_state['onboarding_prompting_end_time'] = None
     
     # Broadcast updated lobby
     lobby_players = [lobby_player_row(p) for p in players.values()]
@@ -4728,6 +4750,7 @@ def restart_game_console():
     # Reset game state
     game_state['status'] = 'lobby'
     game_state['onboarding_phase'] = 'prompting'
+    game_state['onboarding_prompting_end_time'] = None
     game_state['current_round'] = 0
     game_state['round_start_time'] = None
     game_state['round_end_time'] = None
