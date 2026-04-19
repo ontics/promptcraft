@@ -287,7 +287,8 @@ def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
 
     Each label gets floor(n/k) players from consecutive slices of the shuffled list (order of labels
     is fixed only for slicing, not for absorbing overflow). Each remaining player (n % k) is assigned
-    independently and uniformly at random to one of the labels—no remainder bias toward C_NA/C_HU.
+    with a uniform random choice among labels that have not yet received a remainder slot in this
+    split (k-way die, then (k-1)-way, etc.)—so remainder players never stack on the same label.
     """
     n = len(shuffled_players)
     k = len(group_labels)
@@ -300,8 +301,12 @@ def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
     for label in group_labels:
         buckets[label].extend(shuffled_players[idx : idx + base])
         idx += base
+    remainder_labels_used = set()
     for p in shuffled_players[idx : idx + remainder]:
-        buckets[random.choice(group_labels)].append(p)
+        eligible = [L for L in group_labels if L not in remainder_labels_used]
+        pick = random.choice(eligible)
+        buckets[pick].append(p)
+        remainder_labels_used.add(pick)
     return [(label, buckets[label]) for label in group_labels]
 
 
