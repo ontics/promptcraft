@@ -283,18 +283,26 @@ def game_started_aggregate_heuristic_fields(player: dict) -> dict:
 
 def split_into_player_groups(shuffled_players, group_labels=PLAYER_GROUPS):
     """
-    Split a shuffled list into len(group_labels) segments with sizes as equal as possible;
-    remainder players go to the first groups in order (C_NA, then C_HU, then T_NA, then T_HU).
+    Split a shuffled list across len(group_labels) groups.
+
+    Each label gets floor(n/k) players from consecutive slices of the shuffled list (order of labels
+    is fixed only for slicing, not for absorbing overflow). Each remaining player (n % k) is assigned
+    independently and uniformly at random to one of the labels—no remainder bias toward C_NA/C_HU.
     """
     n = len(shuffled_players)
     k = len(group_labels)
-    out = []
-    start = 0
-    for i in range(k):
-        size = n // k + (1 if i < n % k else 0)
-        out.append((group_labels[i], shuffled_players[start : start + size]))
-        start += size
-    return out
+    if k == 0:
+        return []
+    base = n // k
+    remainder = n % k
+    buckets = {label: [] for label in group_labels}
+    idx = 0
+    for label in group_labels:
+        buckets[label].extend(shuffled_players[idx : idx + base])
+        idx += base
+    for p in shuffled_players[idx : idx + remainder]:
+        buckets[random.choice(group_labels)].append(p)
+    return [(label, buckets[label]) for label in group_labels]
 
 
 # Pre-lobby survey (proficiency, frequency, free response)
