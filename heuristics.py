@@ -112,6 +112,11 @@ def aggregate_snapshot_for_round(*, total_prompts: int, total_words: int) -> Dic
 def format_snapshot_for_ui(snapshot: Dict[str, Any]) -> List[Dict[str, str]]:
     """Label + formatted value for prompting, selection, or voting fixture snapshots."""
     out: List[Dict[str, str]] = []
+    snapshot = {
+        k: v
+        for k, v in (snapshot or {}).items()
+        if not (isinstance(k, str) and k.startswith('_allocation'))
+    }
     idx = snapshot.get(HEURISTIC_PROMPT_INDEX.id)
     if idx is None:
         idx = snapshot.get("number_of_prompts")
