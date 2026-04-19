@@ -666,7 +666,8 @@ def create_ballot_with_options(
     """
     options: three dicts with keys slot_index (1-3), source ('fixture'|'player_submission'),
     fixture_image_id (optional), image_url, owner_player_id (optional), prompt_id (optional),
-    heuristic_snapshot (optional dict).
+    heuristic_snapshot (optional dict). For allocation fixture rounds 1–9, heuristic_snapshot may
+    include _allocation_heuristic_source_fixture_id (canonical id for the text box; image id is fixture_image_id).
     """
     if not is_configured() or not game_id or not voting_round_id:
         return None

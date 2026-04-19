@@ -49,6 +49,8 @@ def build_allocation_fixture_order(rng=None):
 
 
 ALLOCATION_FINAL_SUBMIT_KEY = '__allocation_final__'
+# Rounds 1–9 allocation: ballot heuristic_snapshot may include this key (text-box identity when decoupled from image column). See stories/allocation-voting-decoupled-column-shuffles.md
+ALLOCATION_HEURISTIC_SOURCE_FIXTURE_KEY = '_allocation_heuristic_source_fixture_id'
 
 from ballot_balancer import assign_final_ballots
 
@@ -3043,6 +3045,8 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
         fixture_key = fix['fixture_set_key']
         target_url = fix['target_image_url']
 
+    show_h = heur_mod.show_voting_heuristics(p.get('condition'))
+
     # Shared voting_rounds rows keyed by vignette (fixture_set_key), not display order.
     vrid = None
     if db.is_configured() and gid:
@@ -3084,15 +3088,27 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
     opts = []
     slot_owners = []
     if not is_final:
-        for i, c in enumerate(fix['candidates'], start=1):
+        # Decoupled column shuffles (rounds 1–9 only): image order and text-box order are each one uniform random
+        # permutation of [0,1,2], sampled independently per player per emit (no resampling or rejection).
+        cands = fix['candidates']
+        rng = random.Random(int.from_bytes(os.urandom(8), 'big'))
+        perm_img = [0, 1, 2]
+        perm_text = [0, 1, 2]
+        rng.shuffle(perm_img)
+        rng.shuffle(perm_text)
+        for display_col in range(3):
+            img_c = cands[perm_img[display_col]]
+            txt_c = cands[perm_text[display_col]]
+            hs = dict(txt_c.get('heuristics') or {})
+            hs[ALLOCATION_HEURISTIC_SOURCE_FIXTURE_KEY] = txt_c['fixture_image_id']
             opts.append({
-                'slot_index': i,
+                'slot_index': display_col + 1,
                 'source': 'fixture',
-                'fixture_image_id': c['fixture_image_id'],
-                'image_url': c['image_url'],
+                'fixture_image_id': img_c['fixture_image_id'],
+                'image_url': img_c['image_url'],
                 'owner_player_id': None,
                 'prompt_id': None,
-                'heuristic_snapshot': c.get('heuristics'),
+                'heuristic_snapshot': hs,
             })
             slot_owners.append(None)
     else:
@@ -3132,7 +3148,6 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
     if vrid is not None:
         game_state.setdefault('allocation_emit_vrid', {})[key] = vrid
 
-    show_h = heur_mod.show_voting_heuristics(p.get('condition'))
     ui_opts = []
     for o in opts:
         ui_opts.append({
