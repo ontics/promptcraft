@@ -359,6 +359,13 @@ body {
     transform: translateY(-2px);
 }
 
+#start-game-btn.start-game-btn-loading {
+    cursor: wait;
+    opacity: 0.88;
+    transform: none;
+    box-shadow: none;
+}
+
 .btn-onboarding {
     background: #228be6;
     color: white;

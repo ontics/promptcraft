@@ -37,8 +37,9 @@ PromptCraft is a real-time multiplayer web game where players compete to generat
    ```
 
 4. **Set up environment variables:**
-   Create a `.env` file in the project root with the following:
+   Copy `.env.example` to `.env` and fill in values (or create `.env` manually). The server reads `PORT` from the environment; if unset, it defaults to **8000** in `app.py`. For local testing on **5055**, set `PORT=5055` in `.env` or run `./scripts/run-dev-5055.sh`.
    ```
+   PORT=5055
    GEMINI_API_KEY=your_gemini_api_key_here
    SUPABASE_URL=your_supabase_project_url
    SUPABASE_KEY=your_supabase_anon_key
@@ -55,10 +56,15 @@ PromptCraft is a real-time multiplayer web game where players compete to generat
    ```bash
    python app.py
    ```
+   Or, to always use port **5055** without editing `.env`:
+   ```bash
+   chmod +x scripts/run-dev-5055.sh   # first time only
+   ./scripts/run-dev-5055.sh
+   ```
 
 2. **Access the game:**
-   - On the host machine: http://localhost:8000
-   - On other devices in your local network: http://YOUR_IP_ADDRESS:8000
+   - On the host machine: `http://localhost:<PORT>` (match `PORT` in `.env`, or **5055** if you used `run-dev-5055.sh`)
+   - On other devices in your local network: `http://YOUR_IP_ADDRESS:<PORT>`
 
 3. **Find your local IP address:**
    - macOS/Linux: `ifconfig | grep inet`
