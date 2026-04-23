@@ -665,6 +665,7 @@ def admin_joined_payload():
         'game_status': game_state['status'],
         'current_round': game_state.get('current_round', 0),
         'onboarding_phase': game_state.get('onboarding_phase') if game_state['status'] == 'onboarding' else None,
+        'game_id': game_state.get('game_id'),
     }
 
 
@@ -676,6 +677,7 @@ def admin_player_status_payload():
         'game_status': game_state['status'],
         'current_round': game_state.get('current_round', 0),
         'onboarding_phase': game_state.get('onboarding_phase') if game_state['status'] == 'onboarding' else None,
+        'game_id': game_state.get('game_id'),
     }
 
 
@@ -1020,6 +1022,7 @@ def handle_join_game(data):
                     socketio.emit('admin_game_started', {
                         'round': game_state['current_round'],
                         'target': game_state['current_target'],
+                        'game_id': game_state.get('game_id'),
                         'players': [{
                             'name': p.get('display_name', p['name']),
                             'condition': p['condition'],
@@ -1950,6 +1953,7 @@ def handle_start_game():
                 'target': game_state['current_target'],
                 'time_remaining': time_remaining,
                 'round_end_time': game_state.get('round_end_time'),  # Include end time for client calculation
+                'game_id': game_state.get('game_id'),
                 'players': [{
                     'name': p.get('display_name', p['name']),
                     'condition': p['condition'],
@@ -1961,6 +1965,12 @@ def handle_start_game():
             }, room=players[admin_session_id]['socket_id'])
 
         print("Game started!")
+    else:
+        if len(non_admin_players) < 1:
+            emit('error', {'message': 'Need at least one player to start the game.'})
+        else:
+            emit('error', {'message': 'Game can only be started from the lobby.'})
+        return
 
 
 @socketio.on('start_onboarding')
@@ -3096,6 +3106,7 @@ def advance_to_next_prompting_round_after_selection():
             'target': game_state['current_target'],
             'time_remaining': game_state['round_end_time'] - time.time(),
             'round_end_time': game_state.get('round_end_time'),
+            'game_id': game_state.get('game_id'),
             'players': [{
                 'name': x.get('display_name', x['name']),
                 'condition': x['condition'],
@@ -4453,6 +4464,7 @@ def handle_next_round():
                 'target': game_state['current_target'],
                 'time_remaining': time_remaining,
                 'round_end_time': game_state.get('round_end_time'),  # Include end time for client calculation
+                'game_id': game_state.get('game_id'),
                 'players': [{
                     'name': p.get('display_name', p['name']),
                     'condition': p['condition'],
@@ -5126,6 +5138,7 @@ def next_round_console():
                     'round': game_state['current_round'],
                     'target': game_state['current_target'],
                     'time_remaining': time_remaining,
+                    'game_id': game_state.get('game_id'),
                     'players': [{
                         'name': p.get('display_name', p['name']),
                         'condition': p['condition'],

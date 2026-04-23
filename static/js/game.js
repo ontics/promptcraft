@@ -101,6 +101,9 @@ let gameState = {
     postSurveyActive: false,
     canStartPostSurvey: false,
     pendingGameOver: null,
+    /** True between admin Start Game click and admin_game_started / error / timeout. */
+    startGameRequestPending: false,
+    startGameRequestTimer: null,
 };
 
 let timerInterval;
@@ -753,6 +756,11 @@ document.getElementById('start-onboarding-btn')?.addEventListener('click', () =>
 });
 
 document.getElementById('start-game-btn').addEventListener('click', () => {
+    if (!gameState.isAdmin) return;
+    const btn = getStartGameButton();
+    if (!btn || btn.dataset.startGameSuccessLocked || btn.dataset.startGamePhaseLocked) return;
+    if (gameState.startGameRequestPending) return;
+    setStartGameButtonLoading();
     socket.emit('start_game');
 });
 
@@ -986,6 +994,7 @@ socket.on('admin_joined', (data) => {
     // Update admin player list
     updateAdminPlayerList(data.players);
     syncAdminHeaderFromGameStatus();
+    syncAdminStartGameButtonFromServer(data);
     showLobbySurveyForPlayer();
 });
 
@@ -1007,6 +1016,10 @@ socket.on('admin_replaced', (data) => {
 
 socket.on('admin_game_started', (data) => {
     console.log('admin_game_started event received:', data);
+
+    if (gameState.isAdmin && gameState.startGameRequestPending) {
+        setStartGameButtonSuccess(data && data.game_id);
+    }
 
     gameState.inOnboarding = false;
     gameState.awaitingNextPrompting = false;
@@ -1180,6 +1193,7 @@ socket.on('player_status_update', (data) => {
         syncGameStateFromAdminDashboardPayload(data);
         updateAdminPlayerList(data.players);
         syncAdminHeaderFromGameStatus();
+        syncAdminStartGameButtonFromServer(data);
         syncStartPostSurveyButton();
     } else {
         console.warn('player_status_update received but user is not admin');
@@ -1333,6 +1347,91 @@ function syncGameStateFromAdminDashboardPayload(data) {
         gameState.onboardingPromptingEndTime = null;
         gameState.onboardingPhase = 'prompting';
     }
+}
+
+const START_GAME_DEFAULT_LABEL = 'Start Game';
+
+function getStartGameButton() {
+    return document.getElementById('start-game-btn');
+}
+
+function resetStartGameButton() {
+    const btn = getStartGameButton();
+    if (!btn) return;
+    if (gameState.startGameRequestTimer) {
+        clearTimeout(gameState.startGameRequestTimer);
+        gameState.startGameRequestTimer = null;
+    }
+    gameState.startGameRequestPending = false;
+    delete btn.dataset.startGameSuccessLocked;
+    delete btn.dataset.startGamePhaseLocked;
+    btn.disabled = false;
+    btn.classList.remove('start-game-btn-loading');
+    btn.textContent = START_GAME_DEFAULT_LABEL;
+}
+
+function setStartGameButtonLoading() {
+    const btn = getStartGameButton();
+    if (!btn) return;
+    if (gameState.startGameRequestTimer) {
+        clearTimeout(gameState.startGameRequestTimer);
+    }
+    gameState.startGameRequestTimer = setTimeout(() => {
+        if (!gameState.startGameRequestPending) return;
+        resetStartGameButton();
+        alert('Start game did not complete in time. Please try again.');
+    }, 15000);
+    gameState.startGameRequestPending = true;
+    delete btn.dataset.startGameSuccessLocked;
+    delete btn.dataset.startGamePhaseLocked;
+    btn.disabled = true;
+    btn.classList.add('start-game-btn-loading');
+    btn.textContent = 'Starting…';
+}
+
+function setStartGameButtonSuccess(gameId) {
+    const btn = getStartGameButton();
+    if (!btn) return;
+    if (gameState.startGameRequestTimer) {
+        clearTimeout(gameState.startGameRequestTimer);
+        gameState.startGameRequestTimer = null;
+    }
+    gameState.startGameRequestPending = false;
+    delete btn.dataset.startGamePhaseLocked;
+    btn.classList.remove('start-game-btn-loading');
+    btn.disabled = true;
+    btn.dataset.startGameSuccessLocked = '1';
+    const id = gameId != null && gameId !== '' ? String(gameId) : '';
+    btn.textContent = id ? `Started — Game #${id}` : 'Started';
+}
+
+/** Align Start Game control with server phase (admin_joined / player_status_update). */
+function syncAdminStartGameButtonFromServer(data) {
+    if (!gameState.isAdmin) return;
+    const btn = getStartGameButton();
+    if (!btn) return;
+    const st = data && data.game_status;
+    if (st === 'lobby' || st === 'onboarding') {
+        resetStartGameButton();
+        return;
+    }
+    if (gameState.startGameRequestPending) {
+        if (gameState.startGameRequestTimer) {
+            clearTimeout(gameState.startGameRequestTimer);
+            gameState.startGameRequestTimer = null;
+        }
+        gameState.startGameRequestPending = false;
+        btn.classList.remove('start-game-btn-loading');
+    }
+    const gid = data && data.game_id;
+    if (gid != null && gid !== '') {
+        setStartGameButtonSuccess(gid);
+        return;
+    }
+    delete btn.dataset.startGameSuccessLocked;
+    btn.disabled = true;
+    btn.dataset.startGamePhaseLocked = '1';
+    btn.textContent = 'Game in progress';
 }
 
 socket.on('player_prompt_updated', (data) => {
@@ -3170,6 +3269,7 @@ socket.on('game_restarted', (data) => {
 });
 
 socket.on('game_restarted_kick', (data) => {
+    resetStartGameButton();
     // Non-admin players have been kicked - they need to rejoin
     showScreen('lobby');
     
@@ -3224,6 +3324,9 @@ socket.on('game_restarted_kick', (data) => {
 });
 
 socket.on('error', (data) => {
+    if (gameState.startGameRequestPending) {
+        resetStartGameButton();
+    }
     const joinBtn = document.getElementById('join-btn');
     if (joinBtn) joinBtn.disabled = false;
     const msg = data && data.message ? data.message : 'Something went wrong.';
@@ -3444,6 +3547,7 @@ socket.on('admin_awaiting_voting_start', (data) => {
 });
 
 socket.on('return_to_lobby', (data) => {
+    resetStartGameButton();
     // Return to lobby screen
     showScreen('lobby');
     // Reset game state
