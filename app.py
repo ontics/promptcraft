@@ -10,6 +10,7 @@ import gc
 import json
 import threading
 import resource
+import concurrent.futures
 from datetime import datetime, timezone
 from typing import Optional
 from dotenv import load_dotenv
@@ -69,6 +70,39 @@ genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
 # Goal: quantify generation bursts, backlog, and resource pressure without changing gameplay.
 _GEN_METRICS_LOCK = threading.Lock()
 _GEN_IN_FLIGHT = 0
+
+_GEN_EXECUTOR_LOCK = threading.Lock()
+_GEN_EXECUTOR: Optional[concurrent.futures.ThreadPoolExecutor] = None
+
+_PLAYER_GEN_LOCK = threading.Lock()
+_PLAYER_GEN_INFLIGHT: dict[str, int] = {}
+
+
+def _max_concurrent_generations() -> int:
+    try:
+        v = int(os.getenv("PROMPTCRAFT_MAX_CONCURRENT_GENERATIONS", "6") or "6")
+        return max(1, min(32, v))
+    except Exception:
+        return 6
+
+
+def _max_inflight_per_player() -> int:
+    try:
+        v = int(os.getenv("PROMPTCRAFT_MAX_INFLIGHT_PER_PLAYER", "2") or "2")
+        return max(1, min(10, v))
+    except Exception:
+        return 2
+
+
+def _get_gen_executor() -> concurrent.futures.ThreadPoolExecutor:
+    global _GEN_EXECUTOR
+    with _GEN_EXECUTOR_LOCK:
+        if _GEN_EXECUTOR is None:
+            _GEN_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+                max_workers=_max_concurrent_generations(),
+                thread_name_prefix="promptcraft-gen",
+            )
+        return _GEN_EXECUTOR
 
 
 def _metrics_now_iso_z() -> str:
@@ -897,6 +931,19 @@ def handle_disconnect():
 
     if request.sid in player_sessions:
         del player_sessions[request.sid]
+
+
+@socketio.on('resume_session')
+def handle_resume_session(_data=None):
+    """Allow clients to refresh and rehydrate state without pressing Join Game again."""
+    session_id = session.get('session_id')
+    if not session_id or session_id not in players:
+        return
+    player = players[session_id]
+    if player.get('socket_id') != request.sid:
+        player['socket_id'] = request.sid
+    # Reuse existing reconnection path (send state + images if mid-game, or lobby snapshot if in lobby).
+    handle_join_game({})
 
 @socketio.on('join_game')
 def handle_join_game(data):
@@ -2063,6 +2110,26 @@ def handle_send_prompt(data):
             emit('error', {'message': 'Round has ended'})
             return
 
+    # Per-player backpressure: prevent one client from stacking unlimited generations.
+    with _PLAYER_GEN_LOCK:
+        inflight_for_player = _PLAYER_GEN_INFLIGHT.get(session_id, 0)
+        if inflight_for_player >= _max_inflight_per_player():
+            log_metric(
+                "prompt.rejected",
+                loadtest_run_id=loadtest_run_id,
+                session_id=session_id,
+                player_name=player.get("display_name", player.get("name")),
+                onboarding=is_onboarding,
+                round=1 if is_onboarding else current_round,
+                prompt_len=(len(prompt) if isinstance(prompt, str) else None),
+                reason="player_inflight_limit",
+                inflight_for_player=inflight_for_player,
+                max_inflight_for_player=_max_inflight_per_player(),
+            )
+            emit('error', {'message': 'Please wait for your current image to finish generating.'})
+            return
+        _PLAYER_GEN_INFLIGHT[session_id] = inflight_for_player + 1
+
     if is_onboarding:
         player['onboarding_prompt_count'] = player.get('onboarding_prompt_count', 0) + 1
         opc = player['onboarding_prompt_count']
@@ -2129,6 +2196,44 @@ def handle_send_prompt(data):
     if is_onboarding:
         emit('character_message', character_data)
 
+    try:
+        _get_gen_executor().submit(
+            _run_prompt_generation_task,
+            session_id,
+            prompt,
+            prompt_sent_ts,
+            opc,
+            is_onboarding,
+            current_round,
+            ph_round,
+            prompt_len,
+            loadtest_run_id,
+        )
+    except Exception as ex:
+        with _PLAYER_GEN_LOCK:
+            _PLAYER_GEN_INFLIGHT[session_id] = max(0, _PLAYER_GEN_INFLIGHT.get(session_id, 1) - 1)
+        emit('error', {'message': 'Server is busy. Please try again.'})
+        print(f"[GEN] Failed to submit generation task: {ex}")
+    return
+
+
+def _run_prompt_generation_task(
+    session_id: str,
+    prompt: str,
+    prompt_sent_ts: float,
+    opc: int,
+    is_onboarding: bool,
+    current_round: int,
+    ph_round: int,
+    prompt_len: Optional[int],
+    loadtest_run_id: Optional[str],
+) -> None:
+    player = players.get(session_id)
+    if not player:
+        with _PLAYER_GEN_LOCK:
+            _PLAYER_GEN_INFLIGHT[session_id] = max(0, _PLAYER_GEN_INFLIGHT.get(session_id, 1) - 1)
+        return
+
     # Generate image via Gemini when configured, else local placeholder (see use_stub_image_generation).
     try:
         gen_req_id = f"{session_id[:8]}-{ph_round}-{opc}-{int(prompt_sent_ts * 1000)}"
@@ -2175,7 +2280,6 @@ def handle_send_prompt(data):
                 return
             if session_id not in players:
                 return
-            # Stub must work without Supabase: DB writes are gated later; do not return here.
             if not is_onboarding and (not game_state.get('game_id') or not game_state.get('round_id')):
                 print('[STUB] No game_id/round_id — emitting in-memory placeholder (DB save skipped)')
             print(f"[STUB] Placeholder for {player['name']}, r{ph_round}, onboarding={is_onboarding}")
@@ -2187,9 +2291,7 @@ def handle_send_prompt(data):
             error_message = None
             finish_reason = None
             safety_ratings = None
-            ai_response = (
-                'Placeholder image (stub: no GEMINI_API_KEY, or PROMPTCRAFT_STUB_IMAGE_GEN=1).'
-            )
+            ai_response = 'Placeholder image (stub: no GEMINI_API_KEY, or PROMPTCRAFT_STUB_IMAGE_GEN=1).'
             pil_img = Image.open(io.BytesIO(image_bytes))
             if is_onboarding:
                 player['onboarding_current_image'] = pil_img
@@ -2203,45 +2305,25 @@ def handle_send_prompt(data):
                 f"[DEBUG] Player: {player['name']}, Session: {session_id[:8]}..., Round: {ph_round}, "
                 f"onboarding={is_onboarding}, Has current_image: {current_image_obj is not None}"
             )
-        
-            # Construct contents array: include previous image if exists, otherwise just prompt
-            # IMPORTANT: No target description or context is added - only the user's prompt is sent
-            # Conversation history is NOT included in the API request - only the current prompt
+
             if current_image_obj:
-                # We have a previous image - this is a refinement request
-                # Convert PIL Image to base64 for API
                 buffered = io.BytesIO()
                 current_image_obj.save(buffered, format="PNG")
                 in_image_bytes_len = len(buffered.getvalue())
                 img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
-            
-                # Create proper content structure for Gemini API
-                contents = [
-                    {
-                        "inline_data": {
-                            "mime_type": "image/png",
-                            "data": img_base64
-                        }
-                    },
-                    prompt
-                ]
+                contents = [{"inline_data": {"mime_type": "image/png", "data": img_base64}}, prompt]
                 print(f"[API REQUEST] Refining image - Prompt sent to API: '{prompt}' (NO target context)")
             else:
-                # First image generation - use prompt directly (NO target theme, NO target description)
                 contents = [prompt]
                 print(f"[API REQUEST] New image - Prompt sent to API: '{prompt}' (NO target context)")
-        
-            # Generate image using gemini-2.5-flash-image model
+
             try:
                 print(
                     f"[LATENCY] pre-Gemini elapsed {time.time() - prompt_sent_ts:.3f}s since prompt_sent "
                     f"(player={session_id[:8]} round={ph_round} prompt_index={opc})"
                 )
                 t_api_start = time.time()
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash-image",
-                    contents=contents
-                )
+                response = client.models.generate_content(model="gemini-2.5-flash-image", contents=contents)
                 t_api_end = time.time()
                 log_metric(
                     "generation.api_done",
@@ -2259,48 +2341,31 @@ def handle_send_prompt(data):
                     f"[LATENCY] Gemini generate_content took {t_api_end - t_api_start:.2f}s "
                     f"player={session_id[:8]} round={ph_round} prompt_index={opc}"
                 )
-            
-                # Validate game state and player still exist (in case game was restarted during API call)
-                # Allow processing during 'playing', 'transitioning', and 'voting' states since:
-                # - Prompt was submitted during valid 'playing' state (or buffer period)
-                # - Image should still be included in selection gallery even if it arrives late
-                # - We're still in the same round (not a new round or game restart)
+
                 if game_state['status'] not in ['playing', 'transitioning', 'voting', 'onboarding']:
-                    print(f"[WARNING] API response received but game is in invalid state (status: {game_state['status']}). Discarding response.")
+                    print(
+                        f"[WARNING] API response received but game is in invalid state (status: {game_state['status']}). Discarding response."
+                    )
                     return
-            
                 if session_id not in players:
                     print(f"[WARNING] API response received but player {session_id[:8]}... no longer exists. Discarding response.")
                     return
-            
                 if not is_onboarding and (not game_state.get('game_id') or not game_state.get('round_id')):
                     print("[WARNING] API response but game_id or round_id is None — emitting image; DB save will be skipped")
 
-                # Extract error information from API response FIRST (before processing image)
                 api_error_type, api_error_message, finish_reason, safety_ratings = extract_api_error_info(response)
-            
-                # Debug: Print response structure and error info
-                print(f"[API RESPONSE] Response type: {type(response)}")
-                if finish_reason:
-                    print(f"[API RESPONSE] finish_reason: {finish_reason}")
-                if api_error_type:
-                    print(f"[API RESPONSE] Error detected: {api_error_type} - {api_error_message}")
-            
-                # Extract the image data from response
+
                 image_data = None
                 image_bytes = None
                 file_size_kb = None
                 ai_response = "Image generated successfully"
                 error_type = api_error_type
                 error_message = api_error_message
-            
+
                 if response.candidates and len(response.candidates) > 0:
                     for part in response.candidates[0].content.parts:
                         if hasattr(part, 'inline_data') and part.inline_data is not None:
-                            # The data might already be base64 or might be bytes
                             img_data = part.inline_data.data
-                        
-                            # Decode to bytes for analysis
                             if isinstance(img_data, str):
                                 image_bytes = base64.b64decode(img_data)
                                 image_data = f"data:image/png;base64,{img_data}"
@@ -2311,21 +2376,20 @@ def handle_send_prompt(data):
                             else:
                                 print(f"Unexpected data type: {type(img_data)}")
                                 continue
-                        
-                            # Calculate file size
+
                             if image_bytes:
                                 out_image_bytes_len = len(image_bytes)
                                 file_size_kb = get_file_size_kb(image_bytes)
                                 print(f"[IMAGE SIZE] File size: {file_size_kb:.2f} KB")
-                            
-                                # Check if image is suspiciously small (likely placeholder)
+
                                 if is_small_image(file_size_kb, threshold_kb=50):
-                                    if not error_type:  # Don't override API error if already set
+                                    if not error_type:
                                         error_type = 'small_image'
-                                        error_message = f'Image is unusually small ({file_size_kb:.2f} KB), likely a placeholder or policy violation response'
+                                        error_message = (
+                                            f'Image is unusually small ({file_size_kb:.2f} KB), likely a placeholder or policy violation response'
+                                        )
                                     print(f"[WARNING] Small image detected: {file_size_kb:.2f} KB")
-                        
-                            # Only store as current_image if it's valid (not an error)
+
                             if not error_type and not is_small_image(file_size_kb, threshold_kb=50):
                                 pil_img = Image.open(io.BytesIO(image_bytes))
                                 if is_onboarding:
@@ -2334,26 +2398,24 @@ def handle_send_prompt(data):
                                 else:
                                     player['current_image'][current_round] = pil_img
                                     player['has_successful_prompt'][current_round] = True
-                                print(f"[DEBUG] Stored new image for player {player['name']} (session: {session_id[:8]}...), round {ph_round}, successful prompt")
+                                print(
+                                    f"[DEBUG] Stored new image for player {player['name']} (session: {session_id[:8]}...), round {ph_round}, successful prompt"
+                                )
                             else:
                                 if is_onboarding:
                                     player['onboarding_current_image'] = None
                                 else:
                                     player['current_image'][current_round] = None
                                 print(f"[DEBUG] Not storing image for refinement due to error: {error_type}")
-                        
                             break
-            
-                # Handle cases where no image was returned
+
                 if image_data is None:
                     if not error_type:
                         error_type = 'no_image_in_response'
                         error_message = 'API returned success but no image data'
                     print(f"[ERROR] No image in response for player {player['name']}, error_type: {error_type}")
                     image_data = create_placeholder_image(prompt, ph_round)
-                    # Don't set ai_response here - will be set based on error_type below
-            
-                # Set user-friendly response message based on error type
+
                 if error_type:
                     if error_type == 'policy_violation':
                         ai_response = "Your prompt may have violated content policies. Please try a different prompt."
@@ -2363,7 +2425,7 @@ def handle_send_prompt(data):
                         ai_response = "Image generation encountered an error. Please try again."
                     else:
                         ai_response = "Image generation encountered an issue. Please try again."
-                
+
                     cr_msg = 1 if is_onboarding else current_round
                     character_error_message = get_character_error_message(player, cr_msg)
                     character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
@@ -2391,14 +2453,14 @@ def handle_send_prompt(data):
                         )
                         character_data['prompt_count'] = prompt_count_err
 
-                    if is_onboarding:
-                        socketio.emit('character_message', character_data, room=player['socket_id'])
-
-                    socketio.emit('image_generation_error', {
-                        'message': character_error_message,
-                        'error_type': error_type,
-                        'suggest_retry': True
-                    }, room=player['socket_id'])
+                    if player.get('socket_id'):
+                        if is_onboarding:
+                            socketio.emit('character_message', character_data, room=player['socket_id'])
+                        socketio.emit(
+                            'image_generation_error',
+                            {'message': character_error_message, 'error_type': error_type, 'suggest_retry': True},
+                            room=player['socket_id'],
+                        )
 
                     error_entry = {
                         'round': 0 if is_onboarding else current_round,
@@ -2407,12 +2469,11 @@ def handle_send_prompt(data):
                         'prompt': prompt,
                         'error_message': error_message,
                         'finish_reason': finish_reason,
-                        'file_size_kb': file_size_kb
+                        'file_size_kb': file_size_kb,
                     }
                     player['image_generation_errors'].append(error_entry)
                     print(f"[ERROR TRACKING] Player {player['name']}: {error_type} - {error_message}")
                 else:
-                    # Success case - update character state after successful image generation
                     ai_response = "Image generated successfully"
 
             except Exception as img_error:
@@ -2424,7 +2485,7 @@ def handle_send_prompt(data):
                     'timestamp': time.time(),
                     'error_type': error_type,
                     'prompt': prompt,
-                    'error_message': error_message
+                    'error_message': error_message,
                 }
                 player['image_generation_errors'].append(error_entry)
                 print(f"[ERROR TRACKING] Player {player['name']}: Exception in round {ph_round}: {img_error}")
@@ -2461,28 +2522,21 @@ def handle_send_prompt(data):
                     )
                     character_data['prompt_count'] = prompt_count
 
-                if is_onboarding:
-                    socketio.emit('character_message', character_data, room=player['socket_id'])
-                socketio.emit('image_generation_error', {
-                    'message': character_error_message,
-                    'error_type': error_type,
-                    'suggest_retry': True
-                }, room=player['socket_id'])
+                if player.get('socket_id'):
+                    if is_onboarding:
+                        socketio.emit('character_message', character_data, room=player['socket_id'])
+                    socketio.emit(
+                        'image_generation_error',
+                        {'message': character_error_message, 'error_type': error_type, 'suggest_retry': True},
+                        room=player['socket_id'],
+                    )
 
-        # Store conversation
         conversation.append({'role': 'user', 'content': prompt})
         conversation.append({'role': 'assistant', 'content': ai_response})
 
-        if is_onboarding:
-            image_bucket = player['onboarding_images']
-        else:
-            image_bucket = player['images'][current_round]
-
-        # IMPORTANT: prompt_index must reflect SEND order, not completion order.
-        # Otherwise, if prompt B returns before prompt A, the UI placeholders can be filled in swapped order.
+        image_bucket = player['onboarding_images'] if is_onboarding else player['images'][current_round]
         prompt_index = int(opc)
 
-        # Timestamp heuristic should reflect when the player submitted the prompt (not when the image returned).
         prompt_elapsed = 0
         if not is_onboarding:
             rs = game_state.get('round_start_time')
@@ -2505,7 +2559,6 @@ def handle_send_prompt(data):
         snap = None
         agg = None
         if not is_onboarding:
-            # Per-image word count = cumulative words in this round (same as aggregate "Total words" at that moment)
             cumulative_wc_line = heur_mod.show_prompting_heuristics(player.get('condition'))
             snap = heur_mod.snapshot_for_image_entry(
                 prompt_index=prompt_index,
@@ -2517,19 +2570,13 @@ def handle_send_prompt(data):
             image_entry['heuristic_snapshot'] = snap
             valid_for_agg = [im for im in image_bucket if not im.get('error_type')]
             tw = sum(heur_mod.word_count(im.get('prompt', '')) for im in valid_for_agg)
-            agg = heur_mod.aggregate_snapshot_for_round(
-                total_prompts=len(valid_for_agg),
-                total_words=tw,
-            )
+            agg = heur_mod.aggregate_snapshot_for_round(total_prompts=len(valid_for_agg), total_words=tw)
 
-        # Emit image to client immediately so UI is not blocked on Supabase insert/upload.
-        # When DB is used, prompt_id is filled in a background task and sent via `image_prompt_binding`.
         ig_payload = {
             'image_data': image_data,
             'image_url': image_entry.get('image_url'),
             'ai_response': ai_response,
             'prompt': prompt,
-            # Keep for backward compatibility; selection routing now prefers prompt_id/prompt_index.
             'image_index': max(0, prompt_index - 1),
             'prompt_index': prompt_index,
             'prompt_id': image_entry.get('prompt_id'),
@@ -2539,13 +2586,10 @@ def handle_send_prompt(data):
         }
         if not is_onboarding:
             ig_payload['show_prompting_heuristics'] = heur_mod.show_prompting_heuristics(player.get('condition'))
-            ig_payload['per_image_heuristic_display'] = (
-                heur_mod.format_snapshot_for_ui(snap) if snap else []
-            )
-            ig_payload['aggregate_heuristic_display'] = (
-                heur_mod.format_aggregate_for_ui(agg) if agg else []
-            )
-        socketio.emit('image_generated', ig_payload, room=player['socket_id'])
+            ig_payload['per_image_heuristic_display'] = heur_mod.format_snapshot_for_ui(snap) if snap else []
+            ig_payload['aggregate_heuristic_display'] = heur_mod.format_aggregate_for_ui(agg) if agg else []
+        if player.get('socket_id'):
+            socketio.emit('image_generated', ig_payload, room=player['socket_id'])
 
         if not is_onboarding and db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
             submitted_at = datetime.fromtimestamp(prompt_sent_ts)
@@ -2581,6 +2625,9 @@ def handle_send_prompt(data):
                     pl = players[session_id]
                     if prompt_id_local:
                         image_entry['prompt_id'] = prompt_id_local
+                        # Keep base64 only long enough to emit to the client. Persist + upload will provide URL for reconnects.
+                        if os.getenv("PROMPTCRAFT_DROP_BASE64_AFTER_EMIT", "1") == "1":
+                            image_entry.pop("image_data", None)
 
                         def clear_base64_after_upload(image_url, uploaded_prompt_id):
                             if session_id not in players:
@@ -2589,11 +2636,6 @@ def handle_send_prompt(data):
                             for img_ent in pobj['images'].get(current_round, []):
                                 if img_ent.get('prompt_id') == uploaded_prompt_id:
                                     img_ent['image_url'] = image_url
-                                    if 'image_data' in img_ent:
-                                        del img_ent['image_data']
-                                    print(
-                                        f"[MEMORY] Cleared base64 data for prompt_id {uploaded_prompt_id}, using URL: {image_url[:50]}..."
-                                    )
                                     if pobj.get('socket_id'):
                                         socketio.emit(
                                             'image_url_updated',
@@ -2624,10 +2666,7 @@ def handle_send_prompt(data):
                     if sock and image_entry.get('prompt_id') is not None:
                         socketio.emit(
                             'image_prompt_binding',
-                            {
-                                'prompt_index': prompt_index,
-                                'prompt_id': image_entry['prompt_id'],
-                            },
+                            {'prompt_index': prompt_index, 'prompt_id': image_entry['prompt_id']},
                             room=sock,
                         )
                 except Exception as ex:
@@ -2639,10 +2678,7 @@ def handle_send_prompt(data):
                         if pl2.get('socket_id'):
                             socketio.emit(
                                 'image_prompt_binding',
-                                {
-                                    'prompt_index': prompt_index,
-                                    'prompt_id': image_entry['prompt_id'],
-                                },
+                                {'prompt_index': prompt_index, 'prompt_id': image_entry['prompt_id']},
                                 room=pl2['socket_id'],
                             )
 
@@ -2654,77 +2690,51 @@ def handle_send_prompt(data):
                 f"[WARN] Assigned synthetic prompt_id={image_entry['prompt_id']} "
                 "(no prompts row — check SUPABASE_URL / SUPABASE_KEY, round_id, and DB errors)"
             )
-            socketio.emit(
-                'image_prompt_binding',
-                {
-                    'prompt_index': prompt_index,
-                    'prompt_id': image_entry['prompt_id'],
-                },
-                room=player['socket_id'],
-            )
+            if player.get('socket_id'):
+                socketio.emit(
+                    'image_prompt_binding',
+                    {'prompt_index': prompt_index, 'prompt_id': image_entry['prompt_id']},
+                    room=player['socket_id'],
+                )
 
         if admin_session_id in players and players[admin_session_id].get('socket_id'):
-            socketio.emit('player_prompt_updated', {
-                'session_id': session_id,
-                'player_name': player.get('display_name', player['name']),
-                'prompts_submitted': len(image_bucket),
-            }, room=players[admin_session_id]['socket_id'])
+            socketio.emit(
+                'player_prompt_updated',
+                {
+                    'session_id': session_id,
+                    'player_name': player.get('display_name', player['name']),
+                    'prompts_submitted': len(image_bucket),
+                },
+                room=players[admin_session_id]['socket_id'],
+            )
 
     except Exception as e:
         print(f"Error generating image: {e}")
         error_type = 'outer_exception'
         error_message = str(e)
-        error_entry = {
-            'round': 0 if is_onboarding else current_round,
-            'timestamp': time.time(),
-            'error_type': error_type,
-            'prompt': prompt,
-            'error_message': error_message
-        }
-        player['image_generation_errors'].append(error_entry)
-        print(f"[ERROR TRACKING] Player {player['name']}: Outer exception in round {ph_round}: {e}")
-
-        cr_msg = 1 if is_onboarding else current_round
-        character_error_message = get_character_error_message(player, cr_msg)
-        character = 'Bud' if is_onboarding else get_character_for_round(player, current_round)
-
-        character_data = {
-            'character': character,
-            'message': character_error_message,
-            'round': 1 if is_onboarding else current_round,
-        }
-
-        prompt_count = opc if is_onboarding else player.get('prompt_count', 0)
-        has_successful_prompt = (
-            player.get('onboarding_has_successful', False)
-            if is_onboarding
-            else player.get('has_successful_prompt', {}).get(current_round, False)
-        )
-
-        if character == 'Bud':
-            character_data['animation_state'] = get_bud_animation_state()
-        elif character == 'Spud':
-            plant_state = get_spud_plant_state(prompt_count, has_successful_prompt)
-            character_data['plant_state'] = plant_state
-            character_data['animation_state'] = get_spud_animation_state(
-                prompt_count, plant_state, is_error=True, has_successful_prompt=has_successful_prompt
+        try:
+            player['image_generation_errors'].append(
+                {
+                    'round': 0 if is_onboarding else current_round,
+                    'timestamp': time.time(),
+                    'error_type': error_type,
+                    'prompt': prompt,
+                    'error_message': error_message,
+                }
             )
-            character_data['prompt_count'] = prompt_count
-
-        if is_onboarding:
-            socketio.emit('character_message', character_data, room=player['socket_id'])
-        
-        # Also emit error for logging/analytics
-        socketio.emit('image_generation_error', {
-            'message': character_error_message,
-            'error_type': error_type,
-            'suggest_retry': True
-        }, room=player['socket_id'])
+        except Exception:
+            pass
+        if player.get('socket_id'):
+            socketio.emit(
+                'image_generation_error',
+                {'message': 'Image generation encountered an error. Please try again.', 'error_type': error_type, 'suggest_retry': True},
+                room=player['socket_id'],
+            )
     finally:
         try:
             log_metric(
                 "generation.done",
-                loadtest_run_id=locals().get("loadtest_run_id"),
+                loadtest_run_id=loadtest_run_id,
                 gen_req_id=locals().get("gen_req_id"),
                 session_id=session_id,
                 player_name=player.get("display_name", player.get("name")),
@@ -2749,6 +2759,8 @@ def handle_send_prompt(data):
         with _GEN_METRICS_LOCK:
             if _GEN_IN_FLIGHT > 0:
                 _GEN_IN_FLIGHT -= 1
+        with _PLAYER_GEN_LOCK:
+            _PLAYER_GEN_INFLIGHT[session_id] = max(0, _PLAYER_GEN_INFLIGHT.get(session_id, 1) - 1)
 
 def extract_api_error_info(response):
     """
