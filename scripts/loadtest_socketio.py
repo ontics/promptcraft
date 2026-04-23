@@ -22,6 +22,15 @@ from typing import Optional
 
 import socketio  # python-socketio (client)
 
+_LOCK = threading.Lock()
+_COUNTERS = {
+    "connect_ok": 0,
+    "connect_error": 0,
+    "server_error_event": 0,
+    "prompt_sent_event": 0,
+    "image_generated_event": 0,
+}
+
 
 def _rand_name(prefix: str = "Bot") -> str:
     suffix = "".join(random.choice(string.ascii_uppercase) for _ in range(4))
@@ -50,20 +59,35 @@ def run_bot(cfg: BotConfig) -> None:
 
     @sio.event
     def connect():
+        with _LOCK:
+            _COUNTERS["connect_ok"] += 1
         payload = {"name": cfg.name}
         if cfg.seat_number is not None:
             payload["seat_number"] = cfg.seat_number
         sio.emit("join_game", payload)
 
+    @sio.event
+    def connect_error(data):
+        with _LOCK:
+            _COUNTERS["connect_error"] += 1
+
+    @sio.on("error")
+    def on_error(data):
+        # Server emitted an application-level error.
+        with _LOCK:
+            _COUNTERS["server_error_event"] += 1
+
     @sio.on("prompt_sent")
     def on_prompt_sent(data):
         # Minimal signal that the server accepted the prompt.
-        pass
+        with _LOCK:
+            _COUNTERS["prompt_sent_event"] += 1
 
     @sio.on("image_generated")
     def on_image_generated(data):
         # We don't download/process the image; this is just an ack signal.
-        pass
+        with _LOCK:
+            _COUNTERS["image_generated_event"] += 1
 
     @sio.event
     def disconnect():
@@ -112,6 +136,9 @@ def main() -> None:
 
     for t in threads:
         t.join()
+
+    with _LOCK:
+        print("loadtest_summary", _COUNTERS)
 
 
 if __name__ == "__main__":

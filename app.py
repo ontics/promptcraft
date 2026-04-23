@@ -2036,6 +2036,16 @@ def handle_send_prompt(data):
             emit('error', {'message': 'Practice limit reached.'})
             return
     elif game_state['status'] != 'playing':
+        log_metric(
+            "prompt.rejected",
+            session_id=session_id,
+            player_name=player.get("display_name", player.get("name")),
+            onboarding=is_onboarding,
+            game_status=game_state.get("status"),
+            current_round=game_state.get("current_round"),
+            allow_loadtest=os.getenv("PROMPTCRAFT_LOADTEST_ALLOW_PROMPTS"),
+            reason="not_playing",
+        )
         emit('error', {'message': 'Game is not in playing state'})
         return
 
