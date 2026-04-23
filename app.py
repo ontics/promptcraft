@@ -2231,6 +2231,7 @@ def _run_prompt_generation_task(
     prompt_len: Optional[int],
     loadtest_run_id: Optional[str],
 ) -> None:
+    global _GEN_IN_FLIGHT
     player = players.get(session_id)
     if not player:
         with _PLAYER_GEN_LOCK:
