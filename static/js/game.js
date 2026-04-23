@@ -977,7 +977,7 @@ socket.on('admin_joined', (data) => {
         gameState.inAllocationVoting = false;
     }
 
-    // Lobby holds admin chrome (e.g. Restart Game). Show it even if we were mid-game (recovery).
+    // Lobby holds admin chrome (e.g. New Game). Show it even if we were mid-game (recovery).
     showScreen('lobby');
 
     // Show admin screen in lobby

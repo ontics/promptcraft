@@ -4817,7 +4817,7 @@ def handle_back_to_home():
     
     # Only allow non-admin players
     if player['is_admin']:
-        emit('error', {'message': 'Admin cannot use Back to Home - use Restart Game instead'})
+        emit('error', {'message': 'Admin cannot use Back to Home - use New Game instead'})
         return
 
     ensure_post_survey_fields(player)
