@@ -46,6 +46,9 @@ class BotConfig:
     prompts_total: int
     jitter_sec: float
     run_id: Optional[str]
+    wait_after_sec: float
+    wait_for_images: bool
+    wait_timeout_sec: float
 
 
 def run_bot(cfg: BotConfig) -> None:
@@ -57,6 +60,9 @@ def run_bot(cfg: BotConfig) -> None:
         logger=False,
         engineio_logger=False,
     )
+    done_evt = threading.Event()
+    local_lock = threading.Lock()
+    local_images = 0
 
     @sio.event
     def connect():
@@ -87,8 +93,13 @@ def run_bot(cfg: BotConfig) -> None:
     @sio.on("image_generated")
     def on_image_generated(data):
         # We don't download/process the image; this is just an ack signal.
+        nonlocal local_images
         with _LOCK:
             _COUNTERS["image_generated_event"] += 1
+        with local_lock:
+            local_images += 1
+            if local_images >= cfg.prompts_total:
+                done_evt.set()
 
     @sio.event
     def disconnect():
@@ -108,6 +119,10 @@ def run_bot(cfg: BotConfig) -> None:
         sio.emit("send_prompt", payload)
         time.sleep(cfg.prompt_every_sec)
 
+    if cfg.wait_for_images:
+        done_evt.wait(timeout=cfg.wait_timeout_sec)
+    if cfg.wait_after_sec:
+        time.sleep(cfg.wait_after_sec)
     sio.disconnect()
 
 
@@ -121,6 +136,9 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--seat-numbers", action="store_true", help="Send seat_number 1..N")
     ap.add_argument("--run-id", default="", help="Tag prompts with loadtest_run_id for log filtering")
+    ap.add_argument("--wait-after-sec", type=float, default=3.0, help="Wait before disconnect to receive queued images")
+    ap.add_argument("--wait-for-images", action="store_true", help="Wait until all expected images are received")
+    ap.add_argument("--wait-timeout-sec", type=float, default=30.0, help="Max seconds to wait for images")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -135,6 +153,9 @@ def main() -> None:
             prompts_total=args.prompts_per_bot,
             jitter_sec=args.jitter_sec,
             run_id=(args.run_id or None),
+            wait_after_sec=max(0.0, float(args.wait_after_sec or 0.0)),
+            wait_for_images=bool(args.wait_for_images),
+            wait_timeout_sec=max(0.1, float(args.wait_timeout_sec or 0.0)),
         )
         t = threading.Thread(target=run_bot, args=(cfg,), daemon=True)
         t.start()

@@ -11,6 +11,7 @@ import json
 import threading
 import resource
 import concurrent.futures
+import socket
 from datetime import datetime, timezone
 from typing import Optional
 from dotenv import load_dotenv
@@ -141,6 +142,8 @@ def _metrics_heartbeat_loop(interval_sec: float) -> None:
                 inflight = _GEN_IN_FLIGHT
             log_metric(
                 "process.heartbeat",
+                pid=os.getpid(),
+                host=socket.gethostname(),
                 game_status=game_state.get("status"),
                 game_id=game_state.get("game_id"),
                 round_id=game_state.get("round_id"),
