@@ -111,6 +111,8 @@ def _metrics_heartbeat_loop(interval_sec: float) -> None:
                 game_id=game_state.get("game_id"),
                 round_id=game_state.get("round_id"),
                 inflight_generations=inflight,
+                stub_image_gen=os.getenv("PROMPTCRAFT_STUB_IMAGE_GEN"),
+                allow_loadtest=os.getenv("PROMPTCRAFT_LOADTEST_ALLOW_PROMPTS"),
                 rss_mb=_process_rss_mb_best_effort(),
                 gc_counts=list(gc.get_count()),
             )
