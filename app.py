@@ -7,7 +7,10 @@ import random
 import time
 import base64
 import gc
-from datetime import datetime
+import json
+import threading
+import resource
+from datetime import datetime, timezone
 from typing import Optional
 from dotenv import load_dotenv
 import io
@@ -61,6 +64,73 @@ socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
 
 # Configure Gemini API
 genai.configure(api_key=os.getenv('GEMINI_API_KEY'))
+
+# --- Lightweight instrumentation (Phase 1 diagnostics) ---
+# Goal: quantify generation bursts, backlog, and resource pressure without changing gameplay.
+_GEN_METRICS_LOCK = threading.Lock()
+_GEN_IN_FLIGHT = 0
+
+
+def _metrics_now_iso_z() -> str:
+    # Keep UTC, ISO-8601 with Z.
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def log_metric(event: str, **fields) -> None:
+    """Emit one-line structured logs for later aggregation in Railway."""
+    row = {"ts": _metrics_now_iso_z(), "event": event, **fields}
+    try:
+        print("[METRIC] " + json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+    except Exception:
+        # Never allow metrics logging to break gameplay.
+        print(f"[METRIC] {event} (unserializable fields)")
+
+
+def _process_rss_mb_best_effort() -> Optional[float]:
+    try:
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        # Linux: KB. macOS: bytes. Heuristic: if huge, assume bytes.
+        maxrss = float(getattr(ru, "ru_maxrss", 0.0))
+        if maxrss <= 0:
+            return None
+        if maxrss > 10_000_000:  # likely bytes
+            return maxrss / (1024.0 * 1024.0)
+        return maxrss / 1024.0  # KB -> MB
+    except Exception:
+        return None
+
+
+def _metrics_heartbeat_loop(interval_sec: float) -> None:
+    while True:
+        try:
+            with _GEN_METRICS_LOCK:
+                inflight = _GEN_IN_FLIGHT
+            log_metric(
+                "process.heartbeat",
+                game_status=game_state.get("status"),
+                game_id=game_state.get("game_id"),
+                round_id=game_state.get("round_id"),
+                inflight_generations=inflight,
+                rss_mb=_process_rss_mb_best_effort(),
+                gc_counts=list(gc.get_count()),
+            )
+        except Exception:
+            pass
+        time.sleep(interval_sec)
+
+
+def start_metrics_heartbeat_if_enabled() -> None:
+    interval = float(os.getenv("PROMPTCRAFT_METRICS_HEARTBEAT_SEC", "15") or "15")
+    if interval <= 0:
+        return
+    t = threading.Thread(
+        target=_metrics_heartbeat_loop,
+        args=(interval,),
+        daemon=True,
+        name="promptcraft-metrics-heartbeat",
+    )
+    t.start()
+
 
 # Reuse one google.genai Client for all prompts — constructing a Client per request adds measurable latency.
 _genai_sdk_client: Optional[object] = None
@@ -129,6 +199,9 @@ game_state = {
     '_synthetic_ballot_seq': 0,
     '_synthetic_prompt_seq': 0,  # negative prompt_ids when DB insert fails (in-memory selection only)
 }
+
+# Start after game_state exists (heartbeat reads it).
+start_metrics_heartbeat_if_enabled()
 
 players = {}  # session_id: player_data
 player_sessions = {}  # socket_id: session_id
@@ -1925,6 +1998,7 @@ def handle_start_onboarding():
 
 @socketio.on('send_prompt')
 def handle_send_prompt(data):
+    global _GEN_IN_FLIGHT
     session_id = session.get('session_id')
     if session_id not in players:
         return
@@ -1937,6 +2011,19 @@ def handle_send_prompt(data):
         return
     
     prompt = data.get('prompt', '')
+    # Loadtesting-only escape hatch: allow prompt bursts without a full admin-driven game setup.
+    # Off by default so gameplay is unchanged.
+    if game_state.get('status') != 'playing' and game_state.get('status') != 'onboarding':
+        if os.getenv('PROMPTCRAFT_LOADTEST_ALLOW_PROMPTS') == '1':
+            # Minimal synthetic "playing" state so prompt timing guards don't crash on None round times.
+            if game_state.get('current_round', 0) <= 0:
+                game_state['current_round'] = 1
+            if game_state.get('round_start_time') is None:
+                game_state['round_start_time'] = time.time()
+            if game_state.get('round_end_time') is None:
+                game_state['round_end_time'] = game_state['round_start_time'] + 3600  # long window for load tests
+            game_state['status'] = 'playing'
+
     current_round = game_state['current_round']
     is_onboarding = game_state['status'] == 'onboarding'
 
@@ -1970,6 +2057,7 @@ def handle_send_prompt(data):
 
     # Used for analytics: prompt send time vs image_generated_at gives generation latency.
     prompt_sent_ts = time.time()
+    prompt_len = len(prompt) if isinstance(prompt, str) else None
     emit(
         'prompt_sent',
         {
@@ -1977,6 +2065,18 @@ def handle_send_prompt(data):
             'prompt_index': opc,
             'onboarding': is_onboarding,
         },
+    )
+    log_metric(
+        "prompt.received",
+        session_id=session_id,
+        player_name=player.get("display_name", player.get("name")),
+        onboarding=is_onboarding,
+        round=1 if is_onboarding else current_round,
+        prompt_index=opc,
+        prompt_len=prompt_len,
+        game_status=game_state.get("status"),
+        game_id=game_state.get("game_id"),
+        round_id=game_state.get("round_id"),
     )
 
     ph_round = 1 if is_onboarding else current_round
@@ -2015,6 +2115,16 @@ def handle_send_prompt(data):
 
     # Generate image via Gemini when configured, else local placeholder (see use_stub_image_generation).
     try:
+        gen_req_id = f"{session_id[:8]}-{ph_round}-{opc}-{int(prompt_sent_ts * 1000)}"
+        refinement = None
+        skip_api = None
+        t_gen_start = time.time()
+        in_image_bytes_len = None
+        out_image_bytes_len = None
+        file_size_kb = None
+        finish_reason = None
+        error_type = None
+
         if is_onboarding:
             conversation = player['onboarding_conversation']
             current_image_obj = player.get('onboarding_current_image')
@@ -2023,6 +2133,24 @@ def handle_send_prompt(data):
             current_image_obj = player['current_image'][current_round]
 
         skip_api = use_stub_image_generation()
+        refinement = bool(current_image_obj)
+        with _GEN_METRICS_LOCK:
+            _GEN_IN_FLIGHT += 1
+            inflight_now = _GEN_IN_FLIGHT
+        log_metric(
+            "generation.start",
+            gen_req_id=gen_req_id,
+            session_id=session_id,
+            player_name=player.get("display_name", player.get("name")),
+            onboarding=is_onboarding,
+            round=ph_round,
+            prompt_index=opc,
+            prompt_len=prompt_len,
+            refinement=refinement,
+            skip_api=skip_api,
+            inflight_generations=inflight_now,
+            rss_mb=_process_rss_mb_best_effort(),
+        )
 
         if skip_api:
             if game_state['status'] not in ['playing', 'transitioning', 'voting', 'onboarding']:
@@ -2067,6 +2195,7 @@ def handle_send_prompt(data):
                 # Convert PIL Image to base64 for API
                 buffered = io.BytesIO()
                 current_image_obj.save(buffered, format="PNG")
+                in_image_bytes_len = len(buffered.getvalue())
                 img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
             
                 # Create proper content structure for Gemini API
@@ -2097,6 +2226,17 @@ def handle_send_prompt(data):
                     contents=contents
                 )
                 t_api_end = time.time()
+                log_metric(
+                    "generation.api_done",
+                    gen_req_id=gen_req_id,
+                    session_id=session_id,
+                    onboarding=is_onboarding,
+                    round=ph_round,
+                    prompt_index=opc,
+                    refinement=refinement,
+                    api_seconds=round(t_api_end - t_api_start, 3),
+                    inflight_generations=inflight_now,
+                )
                 print(
                     f"[LATENCY] Gemini generate_content took {t_api_end - t_api_start:.2f}s "
                     f"player={session_id[:8]} round={ph_round} prompt_index={opc}"
@@ -2156,6 +2296,7 @@ def handle_send_prompt(data):
                         
                             # Calculate file size
                             if image_bytes:
+                                out_image_bytes_len = len(image_bytes)
                                 file_size_kb = get_file_size_kb(image_bytes)
                                 print(f"[IMAGE SIZE] File size: {file_size_kb:.2f} KB")
                             
@@ -2561,6 +2702,34 @@ def handle_send_prompt(data):
             'error_type': error_type,
             'suggest_retry': True
         }, room=player['socket_id'])
+    finally:
+        try:
+            log_metric(
+                "generation.done",
+                gen_req_id=locals().get("gen_req_id"),
+                session_id=session_id,
+                player_name=player.get("display_name", player.get("name")),
+                onboarding=is_onboarding,
+                round=ph_round,
+                prompt_index=opc,
+                prompt_len=prompt_len,
+                refinement=locals().get("refinement"),
+                skip_api=locals().get("skip_api"),
+                total_seconds=round(time.time() - locals().get("t_gen_start", prompt_sent_ts), 3),
+                prompt_to_done_seconds=round(time.time() - prompt_sent_ts, 3),
+                error_type=locals().get("error_type"),
+                finish_reason=locals().get("finish_reason"),
+                in_image_bytes=locals().get("in_image_bytes_len"),
+                out_image_bytes=locals().get("out_image_bytes_len"),
+                file_size_kb=locals().get("file_size_kb"),
+                inflight_generations=locals().get("inflight_now"),
+                rss_mb=_process_rss_mb_best_effort(),
+            )
+        except Exception:
+            pass
+        with _GEN_METRICS_LOCK:
+            if _GEN_IN_FLIGHT > 0:
+                _GEN_IN_FLIGHT -= 1
 
 def extract_api_error_info(response):
     """

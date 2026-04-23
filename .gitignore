@@ -1,5 +1,6 @@
 # Virtual environment
 venv/
+.venv/
 env/
 ENV/
 
@@ -26,6 +27,9 @@ Thumbs.db
 *.log
 logs.*.json
 playtest_log_analysis.md
+
+# Generated analysis reports (local)
+reports/
 
 # Generated images (experiment data)
 static/generated/

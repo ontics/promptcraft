@@ -8,3 +8,4 @@ python-dotenv==1.0.0
 Pillow>=10.2.0
 # eventlet==0.33.3  # Not compatible with Python 3.12, using threading instead
 supabase>=2.24.0
+websocket-client>=1.8.0
