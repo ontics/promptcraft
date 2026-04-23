@@ -45,6 +45,7 @@ class BotConfig:
     prompt_every_sec: float
     prompts_total: int
     jitter_sec: float
+    run_id: Optional[str]
 
 
 def run_bot(cfg: BotConfig) -> None:
@@ -101,7 +102,10 @@ def run_bot(cfg: BotConfig) -> None:
         if cfg.jitter_sec:
             time.sleep(random.random() * cfg.jitter_sec)
         prompt = f"loadtest prompt {i+1}"
-        sio.emit("send_prompt", {"prompt": prompt})
+        payload = {"prompt": prompt}
+        if cfg.run_id:
+            payload["loadtest_run_id"] = cfg.run_id
+        sio.emit("send_prompt", payload)
         time.sleep(cfg.prompt_every_sec)
 
     sio.disconnect()
@@ -116,6 +120,7 @@ def main() -> None:
     ap.add_argument("--jitter-sec", type=float, default=0.4)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--seat-numbers", action="store_true", help="Send seat_number 1..N")
+    ap.add_argument("--run-id", default="", help="Tag prompts with loadtest_run_id for log filtering")
     args = ap.parse_args()
 
     random.seed(args.seed)
@@ -129,6 +134,7 @@ def main() -> None:
             prompt_every_sec=args.prompt_every_sec,
             prompts_total=args.prompts_per_bot,
             jitter_sec=args.jitter_sec,
+            run_id=(args.run_id or None),
         )
         t = threading.Thread(target=run_bot, args=(cfg,), daemon=True)
         t.start()

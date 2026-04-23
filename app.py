@@ -2012,7 +2012,9 @@ def handle_send_prompt(data):
         emit('error', {'message': 'Admin cannot play - you are the gamemaster'})
         return
     
+    data = data or {}
     prompt = data.get('prompt', '')
+    loadtest_run_id = data.get('loadtest_run_id')
     # Loadtesting-only escape hatch: allow prompt bursts without a full admin-driven game setup.
     # Off by default so gameplay is unchanged.
     if game_state.get('status') != 'playing' and game_state.get('status') != 'onboarding':
@@ -2040,6 +2042,7 @@ def handle_send_prompt(data):
     elif game_state['status'] != 'playing':
         log_metric(
             "prompt.rejected",
+            loadtest_run_id=locals().get("loadtest_run_id"),
             session_id=session_id,
             player_name=player.get("display_name", player.get("name")),
             onboarding=is_onboarding,
@@ -2080,6 +2083,7 @@ def handle_send_prompt(data):
     )
     log_metric(
         "prompt.received",
+        loadtest_run_id=loadtest_run_id,
         session_id=session_id,
         player_name=player.get("display_name", player.get("name")),
         onboarding=is_onboarding,
@@ -2151,6 +2155,7 @@ def handle_send_prompt(data):
             inflight_now = _GEN_IN_FLIGHT
         log_metric(
             "generation.start",
+            loadtest_run_id=loadtest_run_id,
             gen_req_id=gen_req_id,
             session_id=session_id,
             player_name=player.get("display_name", player.get("name")),
@@ -2240,6 +2245,7 @@ def handle_send_prompt(data):
                 t_api_end = time.time()
                 log_metric(
                     "generation.api_done",
+                    loadtest_run_id=loadtest_run_id,
                     gen_req_id=gen_req_id,
                     session_id=session_id,
                     onboarding=is_onboarding,
@@ -2718,6 +2724,7 @@ def handle_send_prompt(data):
         try:
             log_metric(
                 "generation.done",
+                loadtest_run_id=locals().get("loadtest_run_id"),
                 gen_req_id=locals().get("gen_req_id"),
                 session_id=session_id,
                 player_name=player.get("display_name", player.get("name")),
