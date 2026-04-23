@@ -871,6 +871,13 @@ document.getElementById('admin-login-link')?.addEventListener('click', () => {
 // Socket event handlers
 socket.on('connect', () => {
     console.log('Connected to server');
+    // If this browser already has a server session cookie, attempt to resume state automatically.
+    // No-op for brand new visitors.
+    try {
+        socket.emit('resume_session', {});
+    } catch (e) {
+        // ignore
+    }
 });
 
 socket.on('disconnect', () => {
