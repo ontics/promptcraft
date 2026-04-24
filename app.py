@@ -13,7 +13,7 @@ import resource
 import concurrent.futures
 import socket
 from datetime import datetime, timezone
-from typing import Optional
+from typing import List, Optional
 from dotenv import load_dotenv
 import io
 from PIL import Image
@@ -24,6 +24,7 @@ load_dotenv()
 import db  # Database helper module
 import heuristics as heur_mod
 from voting_fixtures import get_fixture_rounds, TOTAL_VOTING_ROUNDS, NUM_HARDCODED_VOTING_ROUNDS
+from voting_fixture_loader import load_round10_synthetic_pool_candidates
 
 # Allocation rounds 1–9: fixture JSON groups (target Oski / Tree / slug). See story per-player-randomized-allocation-fixture-order-1-9.
 _ALLOC_FIXTURE_GROUP_A = (1, 2, 3)
@@ -56,8 +57,53 @@ def build_allocation_fixture_order(rng=None):
 ALLOCATION_FINAL_SUBMIT_KEY = '__allocation_final__'
 # Rounds 1–9 allocation: ballot heuristic_snapshot may include this key (text-box identity when decoupled from image column). See stories/allocation-voting-decoupled-column-shuffles.md
 ALLOCATION_HEURISTIC_SOURCE_FIXTURE_KEY = '_allocation_heuristic_source_fixture_id'
+# Vote 10 fillers when <4 eligible peers or missing R3 selection (see stories/allocation-round-10-synthetic-image-pool.md)
+ROUND10_POOL_TOKEN_PREFIX = "__round10pool__"
 
 from ballot_balancer import assign_final_ballots
+
+
+def _is_round10_pool_token(value) -> bool:
+    return isinstance(value, str) and value.startswith(ROUND10_POOL_TOKEN_PREFIX)
+
+
+def _round10_pool_token_for(fixture_image_id: str) -> str:
+    return f"{ROUND10_POOL_TOKEN_PREFIX}{fixture_image_id}"
+
+
+def _round10_pool_fixture_id_from_slot(value) -> Optional[str]:
+    if not _is_round10_pool_token(value):
+        return None
+    return value[len(ROUND10_POOL_TOKEN_PREFIX) :]
+
+
+def _sample_synthetic_fixture_ids(pool_entries: List[dict], need: int, rng: random.Random) -> List[str]:
+    fids = [c["fixture_image_id"] for c in pool_entries if c.get("fixture_image_id")]
+    if need <= 0 or not fids:
+        return []
+    if len(fids) >= need:
+        return rng.sample(fids, need)
+    return rng.choices(fids, k=need)
+
+
+def _extend_final_allocation_plan_with_synthetic(
+    plan: dict, active_sids: List[str], pool_entries: List[dict], rng: random.Random
+) -> None:
+    """Mutate plan so each active voter has three slot entries (real session ids and/or synthetic pool tokens)."""
+    for sid in active_sids:
+        raw = list(plan.get(sid) or [])
+        base: List[str] = []
+        for tok in raw:
+            if _is_round10_pool_token(tok):
+                continue
+            if isinstance(tok, str) and tok in players and not players[tok].get("is_admin"):
+                base.append(tok)
+        base = base[:3]
+        need = 3 - len(base)
+        if need > 0:
+            for fid in _sample_synthetic_fixture_ids(pool_entries, need, rng):
+                base.append(_round10_pool_token_for(fid))
+        plan[sid] = base[:3]
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.urandom(24)
@@ -3221,6 +3267,17 @@ def start_allocation_voting_phase() -> None:
     except Exception as e:
         print(f"[ALLOC] Final ballot plan precompute failed: {e}")
     game_state['final_allocation_plan'] = plan
+    pool_entries = load_round10_synthetic_pool_candidates()
+    if len(pool_entries) >= 3:
+        rng_fill = random.Random(int(time.time() * 1000) % (2**32))
+        _extend_final_allocation_plan_with_synthetic(
+            plan, list(game_state['voting_active_players']), pool_entries, rng_fill
+        )
+    elif game_state['voting_active_players']:
+        print(
+            "[ALLOC] Round-10 synthetic pool has fewer than 3 valid candidates; "
+            "Vote 10 may still error for voters without three real peer targets."
+        )
 
     for p in non_admin:
         p['allocation_fixture_order'] = build_allocation_fixture_order(
@@ -3258,14 +3315,20 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
         fixture_key = None
         target_url = game_state['target_images'][2]['url']
         plan = game_state.get('final_allocation_plan') or {}
-        triple = plan.get(voter_sid) or []
+        triple = list(plan.get(voter_sid) or [])
+        pool_entries = load_round10_synthetic_pool_candidates()
+        if len(triple) < 3 and len(pool_entries) >= 3:
+            rng_one = random.Random((hash(voter_sid) ^ int(time.time() * 1000)) & 0xFFFFFFFF)
+            _extend_final_allocation_plan_with_synthetic(plan, [voter_sid], pool_entries, rng_one)
+            triple = list(plan.get(voter_sid) or [])
         if len(triple) < 3:
             socketio.emit(
                 'error',
                 {
                     'message': (
                         'Could not build the final voting ballot (missing peer targets). '
-                        'Ensure every player has a round-3 image selection, then try again.'
+                        'Add at least three entries to the Vote 10 synthetic pool JSON, '
+                        'or ensure every player has a round-3 image selection.'
                     ),
                 },
                 room=p['socket_id'],
@@ -3351,8 +3414,26 @@ def emit_allocation_round_for_player(voter_sid: str, round_index: int) -> None:
             slot_owners.append(None)
     else:
         plan = game_state.get('final_allocation_plan') or {}
-        triple = plan.get(voter_sid) or []
-        for i, owner_sid in enumerate(triple, start=1):
+        triple = list(plan.get(voter_sid) or [])
+        pool_by_fid = {c['fixture_image_id']: c for c in load_round10_synthetic_pool_candidates() if c.get('fixture_image_id')}
+        for i, slot_val in enumerate(triple, start=1):
+            pool_fid = _round10_pool_fixture_id_from_slot(slot_val)
+            if pool_fid and pool_fid in pool_by_fid:
+                ent = pool_by_fid[pool_fid]
+                hs = dict(ent.get('heuristics') or {})
+                hs[ALLOCATION_HEURISTIC_SOURCE_FIXTURE_KEY] = pool_fid
+                opts.append({
+                    'slot_index': i,
+                    'source': 'round10_synthetic',
+                    'fixture_image_id': pool_fid,
+                    'image_url': ent['image_url'],
+                    'owner_player_id': None,
+                    'prompt_id': None,
+                    'heuristic_snapshot': hs,
+                })
+                slot_owners.append(None)
+                continue
+            owner_sid = slot_val
             op = players.get(owner_sid)
             sel = op.get('selected_images', {}).get(3, {}) if op else {}
             url = sel.get('image_url') or ''

@@ -1,0 +1,12 @@
+{
+  "fixture_set_key": "hu_round10_synthetic_pool",
+  "target_profile": "oski",
+  "target_image": "/static/images/target1.jpg",
+  "candidates": [
+    {"fixture_image_id": "hu10pool_01", "image": "synthetic_pool/E1.png", "heuristics": {"number_of_prompts": 8, "total_word_count": 240, "time_in_round_seconds": 110}},
+    {"fixture_image_id": "hu10pool_02", "image": "synthetic_pool/E2.png", "heuristics": {"number_of_prompts": 5, "total_word_count": 104, "time_in_round_seconds": 248}},
+    {"fixture_image_id": "hu10pool_03", "image": "synthetic_pool/E3.png", "heuristics": {"number_of_prompts": 5, "total_word_count": 69, "time_in_round_seconds": 230}},
+    {"fixture_image_id": "hu10pool_04", "image": "synthetic_pool/E4.png", "heuristics": {"number_of_prompts": 6, "total_word_count": 128, "time_in_round_seconds": 200}},
+    {"fixture_image_id": "hu10pool_05", "image": "synthetic_pool/E5.png", "heuristics": {"number_of_prompts": 7, "total_word_count": 113, "time_in_round_seconds": 254}}
+  ]
+}
