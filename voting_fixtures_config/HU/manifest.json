@@ -1,6 +1,7 @@
 {
   "label": "HU pilot voting vignettes (rounds 1–9)",
   "static_mount": "/static/voting_fixtures/HU/",
+  "round10_synthetic_pool": "round10_synthetic_pool.json",
   "round_files": [
     "rounds/round_01.json",
     "rounds/round_02.json",
