@@ -604,6 +604,52 @@ def hydrate_post_survey_from_db(player):
         player['post_survey_completed'] = True
 
 
+def rehydrate_round_images_from_db(player, *, round_id: int, game_id: int, round_number: int) -> int:
+    """
+    Best-effort: rebuild `player['images'][round_number]` from the DB for reconnects that land on
+    a different worker/process (where in-memory images are missing).
+    """
+    if not db.is_configured():
+        return 0
+    sid = player.get('session_id')
+    if not sid or not round_id or not game_id:
+        return 0
+    try:
+        r = (
+            db.supabase.table('prompts')
+            .select('prompt_id,prompt_index,prompt_text,ai_response,image_url,error_type,file_size_kb')
+            .eq('game_id', game_id)
+            .eq('round_id', round_id)
+            .eq('player_id', sid)
+            .order('prompt_index')
+            .execute()
+        )
+        rows = r.data or []
+        if not rows:
+            return 0
+        player.setdefault('images', {})
+        bucket = []
+        for row in rows:
+            bucket.append(
+                {
+                    'prompt_id': row.get('prompt_id'),
+                    'prompt_index': row.get('prompt_index'),
+                    'prompt': row.get('prompt_text') or '',
+                    'ai_response': row.get('ai_response') or '',
+                    'image_url': row.get('image_url'),
+                    # We can't restore base64 across processes; keep empty and prefer URL.
+                    'image_data': '',
+                    'error_type': row.get('error_type'),
+                    'file_size_kb': row.get('file_size_kb'),
+                }
+            )
+        player['images'][round_number] = bucket
+        return len(bucket)
+    except Exception as e:
+        print(f"[RECONNECT] Could not rehydrate prompts from database: {e}")
+        return 0
+
+
 def emit_post_survey_if_pending(player):
     """Tell client to open post-survey UI when session is active and they have not finished."""
     if player.get('is_admin'):
@@ -1198,6 +1244,18 @@ def handle_join_game(data):
                     _gs.update(game_started_aggregate_heuristic_fields(player))
                     socketio.emit('game_started', _gs, room=player['socket_id'])
                     # Restore their generated images
+                    if not player['images'].get(current_round) and db.is_configured():
+                        restored = rehydrate_round_images_from_db(
+                            player,
+                            round_id=game_state.get('round_id'),
+                            game_id=game_state.get('game_id'),
+                            round_number=current_round,
+                        )
+                        if restored:
+                            print(
+                                f"[RECONNECT] Rehydrated {restored} images from DB for player "
+                                f"{player.get('display_name', player['name'])} in round {current_round}"
+                            )
                     if player['images'].get(current_round):
                         for img_data in player['images'][current_round]:
                             # Prefer image_url over image_data to reduce memory usage
@@ -1231,6 +1289,18 @@ def handle_join_game(data):
                 elif game_state['status'] in ['playing', 'voting']:
                     # Restore their generated images for both playing and voting states
                     # This ensures reconnected players get their images restored properly
+                    if not player['images'].get(current_round) and db.is_configured():
+                        restored = rehydrate_round_images_from_db(
+                            player,
+                            round_id=game_state.get('round_id'),
+                            game_id=game_state.get('game_id'),
+                            round_number=current_round,
+                        )
+                        if restored:
+                            print(
+                                f"[RECONNECT] Rehydrated {restored} images from DB for player "
+                                f"{player.get('display_name', player['name'])} in round {current_round}"
+                            )
                     if player['images'].get(current_round):
                         restored_count = 0
                         for img_data in player['images'][current_round]:
@@ -3844,15 +3914,15 @@ def start_voting_phase():
     print(f"Voting phase started for round {current_round}")
 
 
-def _persist_image_selection_row(player, current_round: int, selected_img: dict) -> None:
+def _persist_image_selection_row(player, current_round: int, selected_img: dict) -> bool:
     """Write image_selections with heuristic snapshot and selection-vs-latest offset."""
     if not db.is_configured() or not game_state.get('game_id') or not game_state.get('round_id'):
-        return
+        return False
     prompt_id = selected_img.get('prompt_id')
     if not prompt_id:
-        return
+        return False
     if isinstance(prompt_id, (int, float)) and prompt_id < 0:
-        return
+        return False
     imgs = player['images'].get(current_round, [])
     pi = selected_img.get('prompt_index', 1)
     elapsed = int(selected_img.get('prompt_sent_elapsed_seconds') or 0)
@@ -3872,7 +3942,7 @@ def _persist_image_selection_row(player, current_round: int, selected_img: dict)
     ]
     max_idx = max(idxs) if idxs else pi
     steps_back = (max_idx - pi) if max_idx is not None and pi is not None else None
-    db.save_image_selection(
+    return db.save_image_selection(
         player_id=player['session_id'],
         round_id=game_state['round_id'],
         game_id=game_state['game_id'],
@@ -3974,11 +4044,20 @@ def handle_select_image(data):
     player['selected_images'][current_round] = selected_image
     player['has_confirmed_selection'][current_round] = True  # Mark as confirmed
     
-    _persist_image_selection_row(player, current_round, selected_image)
+    saved_ok = _persist_image_selection_row(player, current_round, selected_image)
     if db.is_configured() and game_state.get('game_id') and game_state.get('round_id'):
-        print(f"✅ Saved image selection for player {player.get('display_name', player['name'])} in round {current_round}, prompt_id={final_prompt_id}")
+        if saved_ok:
+            print(
+                f"✅ Saved image selection for player {player.get('display_name', player['name'])} "
+                f"in round {current_round}, prompt_id={final_prompt_id}"
+            )
+        else:
+            print(
+                f"❌ Error saving image selection for player {player.get('display_name', player['name'])} "
+                f"in round {current_round}, prompt_id={final_prompt_id}"
+            )
     else:
-        print(f"⚠️ WARNING: Cannot save image selection - database not configured or missing game_id/round_id")
+        print("⚠️ WARNING: Cannot save image selection - database not configured or missing game_id/round_id")
     
     emit('image_selected', {'success': True})
 

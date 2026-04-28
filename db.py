@@ -529,7 +529,7 @@ def save_image_selection(
 ):
     """Save a player's image selection. Uses upsert to handle duplicate selections gracefully."""
     if not is_configured() or not game_id or not round_id:
-        return
+        return False
     
     try:
         row = {
@@ -549,10 +549,24 @@ def save_image_selection(
             row['selection_steps_back_from_latest'] = selection_steps_back_from_latest
         if heuristic_snapshot is not None:
             row['heuristic_snapshot'] = heuristic_snapshot
-        supabase.table('image_selections').upsert(row).execute()
+        # Idempotent save: table has a unique constraint on (player_id, round_id)
+        supabase.table('image_selections').upsert(row, on_conflict='player_id,round_id').execute()
         print(f"✅ Saved image selection: player={player_id}, prompt_id={prompt_id}")
+        return True
     except Exception as e:
+        # Defensive fallback: if the upsert didn't resolve the unique constraint for any reason,
+        # treat it as an update to the existing (player_id, round_id) row.
+        err = str(e)
+        if '23505' in err or 'duplicate key value violates unique constraint' in err:
+            try:
+                supabase.table('image_selections').update(row).eq('player_id', player_id).eq('round_id', round_id).execute()
+                print(f"✅ Updated image selection (after conflict): player={player_id}, prompt_id={prompt_id}")
+                return True
+            except Exception as e2:
+                print(f"❌ Error updating image selection after conflict: {e2}")
+                return False
         print(f"❌ Error saving image selection: {e}")
+        return False
 
 
 def save_vote(voter_id: str, voted_for_player_id: str, voted_for_prompt_id: int, 
