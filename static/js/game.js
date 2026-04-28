@@ -658,6 +658,15 @@ function resetPostGameSurveyForm() {
     updatePostGameSurveySubmitEnabled();
 }
 
+function postSurveyHasDraftInput() {
+    for (let i = 1; i <= 4; i++) {
+        const v = (document.getElementById(`post-free-q${i}`)?.value || '').trim();
+        if (v) return true;
+    }
+    if (document.querySelector('#post-game-survey-form-wrap input[type="radio"]:checked')) return true;
+    return false;
+}
+
 function updatePostGameSurveySubmitEnabled() {
     const submit = document.getElementById('post-game-survey-submit-btn');
     if (!submit || submit.dataset.submitted === '1') return;
@@ -953,7 +962,9 @@ socket.on('game_joined', (data) => {
         } else if (!gameState.isAdmin && gameState.postSurveyActive && gameState.postSurveyCompleted) {
             showScreen('postSurveyWaiting');
         } else if (!gameState.isAdmin && gameState.postSurveyActive && !gameState.postSurveyCompleted) {
-            resetPostGameSurveyForm();
+            if (!postSurveyHasDraftInput()) {
+                resetPostGameSurveyForm();
+            }
             showScreen('postGameSurvey');
         }
 
@@ -1217,7 +1228,9 @@ socket.on('post_survey_started', (data) => {
     }
     const hintGo = document.getElementById('gameover-post-survey-hint');
     if (hintGo) hintGo.style.display = 'none';
-    resetPostGameSurveyForm();
+    if (!postSurveyHasDraftInput()) {
+        resetPostGameSurveyForm();
+    }
     showScreen('postGameSurvey');
 });
 
